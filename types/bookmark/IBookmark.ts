@@ -4,7 +4,9 @@ export interface IBookmark {
 	description: string;
 	url: string;
 	imageUrl?: string;
-	classificationIds: string[];
+	level1Id?: string;
+	level2Id?: string;
+	level3Id?: string[];
 	createdAt?: Date | string;
 	isFavorite?: boolean;
 }
