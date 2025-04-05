@@ -5,7 +5,8 @@ import { Input } from '@/components/ui/input';
 import BookmarkCard from '@/components/BookmarkCard.vue';
 import type { IBookmark } from '~/types';
 import { getClassificationNames } from '~/utils/classificationHierarchy';
-import { Skeleton } from '@/components/ui/skeleton'; // Import Skeleton for loading state
+import { Skeleton } from '@/components/ui/skeleton';
+import { Query } from "appwrite"; // Import Skeleton for loading state
 
 // Filter/State Management (remains the same)
 const selectedL1Id = useState<string | null>('selectedL1Id', () => null);
@@ -29,11 +30,12 @@ const { data: bookmarks, pending, error: fetchError, refresh } = useAsyncData<IB
       try {
         const response = await $appwrite.databases.listDocuments(
             DATABASE_ID,
-            COLLECTION_ID_BOOKMARKS
-            // Add queries later if needed, e.g., [Query.orderDesc('$createdAt')]
+            COLLECTION_ID_BOOKMARKS,
+            [
+              Query.equal('status', 'verified')
+            ]
         );
-        console.log('Appwrite response:', response);
-        // Map Appwrite documents to our IBookmark interface
+
         return response.documents.map(doc => ({
           id: doc.$id,
           title: doc.title,
