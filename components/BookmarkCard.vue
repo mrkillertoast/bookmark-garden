@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { type PropType } from 'vue'
+import { computed } from 'vue' // Import computed if not already there
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -10,57 +10,51 @@ import {
   CardHeader,
   CardTitle,
 } from '@/components/ui/card'
+// No need to import Bookmark type here, define props directly
 
-interface BookmarkProps {
-  id: string | number
-  imageUrl?: string
-  tags: string[]
-  title: string
-  description: string
-  url: string
+// Define props for the card component
+interface BookmarkCardProps {
+  id: string | number;
+  imageUrl?: string;
+  classificationNames: string[]; // Expects an array of names like ['Development', 'Frontend', 'React']
+  title: string;
+  description: string;
+  url: string;
 }
 
-const props = defineProps<BookmarkProps>()
+const props = defineProps<BookmarkCardProps>()
 
-// Todo: Handle potential missing image (provide a fallback or conditional rendering)
 const hasImage = computed(() => !!props.imageUrl)
 
-// Define emits if needed later (e.g., for edit/delete actions)
-// const emit = defineEmits(['edit', 'delete'])
-
-// function handleEdit() {
-//   emit('edit', props.id)
-// }
-
-// function handleDelete() {
-//   emit('delete', props.id)
-// }
 </script>
 
 <template>
-  <Card class="flex flex-col h-full"> <CardHeader v-if="hasImage" class="p-0">
-    <img
-        :src="props.imageUrl"
-        :alt="`Image for ${props.title}`"
-        class="aspect-video w-full object-cover rounded-t-lg"
-        loading="lazy"
-    >
-  </CardHeader>
+  <Card class="flex flex-col h-full">
+    <CardHeader v-if="hasImage" class="p-0">
+      <img
+          :src="props.imageUrl"
+          :alt="`Image for ${props.title}`"
+          class="aspect-video w-full object-cover rounded-t-lg"
+          loading="lazy"
+      >
+    </CardHeader>
     <CardHeader v-else class="p-0">
       <div class="aspect-video w-full bg-muted rounded-t-lg flex items-center justify-center">
         <Icon name="lucide:image-off" class="h-10 w-10 text-muted-foreground" />
       </div>
     </CardHeader>
 
-    <CardContent class="pt-4 flex-grow"> <div class="mb-2 flex flex-wrap gap-1">
-      <Badge v-for="tag in props.tags" :key="tag" variant="outline">
-        {{ tag }}
-      </Badge>
-    </div>
+    <CardContent class="pt-4 flex-grow">
+      <div class="mb-2 flex flex-wrap gap-1">
+        <Badge v-for="name in props.classificationNames" :key="name" variant="outline">
+          {{ name }}
+        </Badge>
+      </div>
       <CardTitle class="text-lg mb-1">
         {{ props.title }}
       </CardTitle>
-      <CardDescription class="text-sm line-clamp-2"> {{ props.description }}
+      <CardDescription class="text-sm line-clamp-2">
+        {{ props.description }}
       </CardDescription>
     </CardContent>
 
@@ -71,10 +65,11 @@ const hasImage = computed(() => !!props.imageUrl)
           Visit
         </Button>
       </NuxtLink>
-
       <div class="flex gap-1">
-        <Button variant="ghost" size="icon" class="h-8 w-8"> <Icon name="lucide:pencil" class="h-4 w-4" />
-          <span class="sr-only">Edit</span> </Button>
+        <Button variant="ghost" size="icon" class="h-8 w-8">
+          <Icon name="lucide:pencil" class="h-4 w-4" />
+          <span class="sr-only">Edit</span>
+        </Button>
         <Button variant="ghost" size="icon" class="h-8 w-8">
           <Icon name="lucide:trash-2" class="h-4 w-4" />
           <span class="sr-only">Delete</span>
@@ -85,4 +80,5 @@ const hasImage = computed(() => !!props.imageUrl)
 </template>
 
 <style scoped>
+/* Styles */
 </style>
