@@ -61,35 +61,39 @@ const { data: bookmarks, pending, error: fetchError, refresh } = useAsyncData<IB
     }
 );
 
-
-// --- Toggle Favorite Handler (Updates Local State + Placeholder for Backend) ---
+// Function to handle toggling favorite status
 async function handleToggleFavorite(bookmarkId: number | string) {
   // Find in the current reactive data ref
   const bookmark = bookmarks.value?.find(b => b.id === bookmarkId);
-  if (bookmark) {
-    const newFavoriteStatus = !bookmark.isFavorite;
-    bookmark.isFavorite = newFavoriteStatus; // Optimistic UI update
-    console.log(`Optimistically toggled favorite for ${ bookmarkId } to ${ newFavoriteStatus }`);
+  if (!bookmark) return; // Exit if bookmark not found
 
-    try {
-      // TODO: Persist change to Appwrite
-      console.log(`TODO: Update bookmark ${ bookmarkId } favorite status to ${ newFavoriteStatus } in Appwrite`);
-      // Example (implement this later):
-      // await $appwrite.databases.updateDocument(
-      //     DATABASE_ID,
-      //     COLLECTION_ID_BOOKMARKS,
-      //     bookmarkId as string, // Ensure ID is string
-      //     { isFavorite: newFavoriteStatus }
-      // );
-      // console.log(`Successfully updated favorite status for ${bookmarkId}`);
-      // Optional: Call refresh() if you want to re-fetch all data after update,
-      // but optimistic update is usually better UX.
-    } catch (err) {
-      console.error(`Error updating favorite status for ${ bookmarkId }:`, err);
-      // Revert optimistic update on error
-      bookmark.isFavorite = !newFavoriteStatus;
-      // Show error message to user
-    }
+  const originalFavoriteStatus = bookmark.isFavorite;
+  const newFavoriteStatus = !bookmark.isFavorite;
+
+  // 1. Optimistic UI update
+  bookmark.isFavorite = newFavoriteStatus;
+  console.log(`Optimistically toggled favorite for ${ bookmarkId } to ${ newFavoriteStatus }`);
+
+  // 2. Persist change to Appwrite
+  try {
+    console.log(`Attempting to update bookmark ${ bookmarkId } favorite status to ${ newFavoriteStatus } in Appwrite...`);
+    await $appwrite.databases.updateDocument(
+        DATABASE_ID,
+        COLLECTION_ID_BOOKMARKS,
+        bookmarkId as string, // Ensure ID is string for Appwrite
+        { isFavorite: newFavoriteStatus } // Data to update
+    );
+    console.log(`Successfully updated favorite status for ${ bookmarkId }`);
+    // Optional: Show success toast/message
+    // Example: toast.success('Favorite status updated!')
+
+  } catch (err) {
+    console.error(`Error updating favorite status for ${ bookmarkId }:`, err);
+    // 3. Revert optimistic update on error
+    bookmark.isFavorite = originalFavoriteStatus;
+    // Show error message to user
+    // Example: toast.error('Failed to update favorite status.', { description: err.message })
+    alert(`Error updating favorite: ${ err.message || 'Unknown error' }`); // Simple alert for now
   }
 }
 
