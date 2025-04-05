@@ -1,112 +1,122 @@
 <script setup lang="ts">
-import { ref, computed, watch } from 'vue' // Add watch
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import BookmarkCard from '@/components/BookmarkCard.vue'
+import { ref, computed } from 'vue';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import BookmarkCard from '@/components/BookmarkCard.vue';
 import type { IBookmark } from '~/types';
 import { getClassificationNames } from '~/utils/classificationHierarchy';
-import { useSelectedL1Id, useSelectedL2Id } from "~/composables/useFilters";
+import { Skeleton } from '@/components/ui/skeleton'; // Import Skeleton for loading state
 
-// Use useState to read the shared filter state
-const selectedL1Id = useSelectedL1Id()
-const selectedL2Id = useSelectedL2Id();
+// Filter/State Management (remains the same)
+const selectedL1Id = useState<string | null>('selectedL1Id', () => null);
+const selectedL2Id = useState<string | null>('selectedL2Id', () => null);
+const searchQuery = ref('');
+const showFavoritesOnly = ref(false);
 
-const searchQuery = ref(''); // Existing search state
+// --- Runtime Config ---
+const config = useRuntimeConfig();
 
-// Sample data (ensure it includes createdAt dates)
-const bookmarks = ref<IBookmark[]>([
-  {
-    id: 1,
-    imageUrl: 'https://upload.wikimedia.org/wikipedia/commons/thumb/a/a7/React-icon.svg/1280px-React-icon.svg.png',
-    classificationIds: [ 'dev', 'frontend', 'react' ],
-    title: 'React Documentation',
-    description: 'Official documentation for React, a JavaScript library for building user interfaces.',
-    url: 'https://react.dev/',
-    createdAt: new Date(2025, 3, 4), // Example date
-  },
-  {
-    id: 2,
-    imageUrl: 'https://upload.wikimedia.org/wikipedia/commons/thumb/d/d9/Node.js_logo.svg/1280px-Node.js_logo.svg.png',
-    classificationIds: [ 'dev', 'backend', 'node' ],
-    title: 'Node.js',
-    description: 'Node.js® is a JavaScript runtime built on Chrome\'s V8 JavaScript engine.',
-    url: 'https://nodejs.org/',
-    createdAt: new Date(2025, 3, 1),
-    isFavorite: true
+// --- Appwrite Config --- (Ensure these are correct)
+const DATABASE_ID = config.public.appwriteDatabaseId;
+const COLLECTION_ID_BOOKMARKS = config.public.appwriteCollectionId;
 
-  },
-  {
-    id: 3,
-    imageUrl: 'https://upload.wikimedia.org/wikipedia/commons/thumb/4/4e/Docker_logo.svg/1280px-Docker_logo.svg.png',
-    classificationIds: [ 'dev', 'backend', 'docker' ],
-    title: 'Docker',
-    description: 'Docker: Accelerate how you build, share, and run applications.',
-    url: 'https://www.docker.com/',
-    createdAt: new Date(2025, 3, 5), // Today
-  },
-  {
-    id: 4,
-    // No image example
-    classificationIds: [ 'learn', 'courses' ],
-    title: 'Coursera',
-    description: 'Learn without limits. Find online courses from top universities.',
-    url: 'https://www.coursera.org/',
-    createdAt: new Date(2025, 2, 15),
-  },
-  {
-    id: 5,
-    imageUrl: 'https://upload.wikimedia.org/wikipedia/commons/thumb/0/08/Netflix_2015_logo.svg/1280px-Netflix_2015_logo.svg.png',
-    classificationIds: [ 'ent', 'movies' ], // Example L1, L2
-    title: 'Netflix',
-    description: 'Watch TV shows and movies online.',
-    url: 'https://www.netflix.com',
-    createdAt: new Date(2025, 1, 10),
-  },
-  {
-    id: 6,
-    imageUrl: 'https://upload.wikimedia.org/wikipedia/commons/thumb/e/e9/Notion-logo.svg/1024px-Notion-logo.svg.png',
-    classificationIds: [ 'prod', 'tools', 'notion' ], // L1, L2, L3
-    title: 'Notion',
-    description: 'All-in-one workspace for notes, tasks, wikis, and databases.',
-    url: 'https://www.notion.so',
-    createdAt: new Date(2025, 3, 3),
-    isFavorite: true
-  },
-]);
+// --- Fetch Bookmarks using useAsyncData ---
+const { $appwrite } = useNuxtApp();
+const { data: bookmarks, pending, error: fetchError, refresh } = useAsyncData<IBookmark[]>(
+    'bookmarks-list', // Unique key for the fetch
+    async () => {
+      console.log('Fetching bookmarks from Appwrite...');
+      try {
+        const response = await $appwrite.databases.listDocuments(
+            DATABASE_ID,
+            COLLECTION_ID_BOOKMARKS
+            // Add queries later if needed, e.g., [Query.orderDesc('$createdAt')]
+        );
+        console.log('Appwrite response:', response);
+        // Map Appwrite documents to our IBookmark interface
+        return response.documents.map(doc => ({
+          id: doc.$id,
+          title: doc.title,
+          description: doc.description,
+          url: doc.url,
+          imageUrl: doc.imageUrl, // Optional field
+          classificationIds: doc.classificationIds || [], // Ensure it's an array
+          isFavorite: doc.isFavorite ?? false, // Default if null/undefined
+          // Use Appwrite's metadata for dates if you didn't create specific attributes
+          createdAt: doc.$createdAt,
+          // Add other fields as needed
+        } as IBookmark));
+      } catch (err) {
+        console.error('Error fetching bookmarks:', err);
+        // Handle error appropriately, maybe return [] or throw
+        return []; // Return empty array on error for now
+      }
+    }, {
+      // Optional: Default value while loading
+      default: () => [] as IBookmark[],
+      // Optional: Pick only needed parts, or use transform
+      // transform: (data) => data.map(...) // Alternative mapping location
+      // Optional: Watch reactive sources to auto-refresh
+      // watch: [searchQuery, selectedL1Id, ...] // BE CAREFUL: client-side filtering might be better
+    }
+);
 
 
-const showFavoritesOnly = ref(false); // New state for favorites filter
-
-// Function to handle toggling favorite status (will update backend later)
-function handleToggleFavorite(bookmarkId: number | string) {
-  const bookmark = bookmarks.value.find(b => b.id === bookmarkId);
+// --- Toggle Favorite Handler (Updates Local State + Placeholder for Backend) ---
+async function handleToggleFavorite(bookmarkId: number | string) {
+  // Find in the current reactive data ref
+  const bookmark = bookmarks.value?.find(b => b.id === bookmarkId);
   if (bookmark) {
-    bookmark.isFavorite = !bookmark.isFavorite;
-    console.log(`Toggled favorite for ${ bookmarkId } to ${ bookmark.isFavorite }`);
-    // TODO: Add Appwrite database update here later
+    const newFavoriteStatus = !bookmark.isFavorite;
+    bookmark.isFavorite = newFavoriteStatus; // Optimistic UI update
+    console.log(`Optimistically toggled favorite for ${ bookmarkId } to ${ newFavoriteStatus }`);
+
+    try {
+      // TODO: Persist change to Appwrite
+      console.log(`TODO: Update bookmark ${ bookmarkId } favorite status to ${ newFavoriteStatus } in Appwrite`);
+      // Example (implement this later):
+      // await $appwrite.databases.updateDocument(
+      //     DATABASE_ID,
+      //     COLLECTION_ID_BOOKMARKS,
+      //     bookmarkId as string, // Ensure ID is string
+      //     { isFavorite: newFavoriteStatus }
+      // );
+      // console.log(`Successfully updated favorite status for ${bookmarkId}`);
+      // Optional: Call refresh() if you want to re-fetch all data after update,
+      // but optimistic update is usually better UX.
+    } catch (err) {
+      console.error(`Error updating favorite status for ${ bookmarkId }:`, err);
+      // Revert optimistic update on error
+      bookmark.isFavorite = !newFavoriteStatus;
+      // Show error message to user
+    }
   }
 }
 
 
+// --- Filtering Logic (Now operates on the reactive 'bookmarks' data from useAsyncData) ---
 const filteredBookmarks = computed<IBookmark[]>(() => {
-  let items = bookmarks.value;
+  // If data is not yet loaded or empty, return empty array
+  if (!bookmarks.value) {
+    return [];
+  }
+
+  let items = bookmarks.value; // Use the fetched data
   const lowerSearch = searchQuery.value?.toLowerCase() || '';
 
-  // 1. Filter by Favorites (if active)
+  // Apply filters... (rest of the filtering logic remains the same)
+  // 1. Filter by Favorites
   if (showFavoritesOnly.value) {
     items = items.filter(bookmark => bookmark.isFavorite);
   }
-
   // 2. Filter by Selected L1 Category
   if (selectedL1Id.value) {
     items = items.filter(bookmark => bookmark.classificationIds.includes(selectedL1Id.value!));
   }
-
   // 3. Filter by Selected L2 Category
   if (selectedL2Id.value) {
     items = items.filter(bookmark => bookmark.classificationIds.includes(selectedL2Id.value!));
   }
-
   // 4. Filter by Search Query
   if (lowerSearch) {
     items = items.filter(bookmark => {
@@ -119,6 +129,7 @@ const filteredBookmarks = computed<IBookmark[]>(() => {
 
   return items;
 });
+
 
 </script>
 
@@ -147,20 +158,26 @@ const filteredBookmarks = computed<IBookmark[]>(() => {
             class="w-full pl-9"
         />
       </div>
+    </div>
 
-      <div class="flex items-center gap-2">
-        <Button
-            variant="outline"
-            @click="showFavoritesOnly = !showFavoritesOnly"
-            :class="{ 'bg-accent text-accent-foreground': showFavoritesOnly }"
-        >
-          <Icon name="lucide:star" class="mr-2 h-4 w-4" :class="{'fill-current': showFavoritesOnly}"/>
-          Favorites
-        </Button>
+    <div v-if="pending" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-6">
+      <div v-for="n in 6" :key="n" class="space-y-3">
+        <Skeleton class="h-[125px] w-full rounded-lg"/>
+        <div class="space-y-2">
+          <Skeleton class="h-4 w-[200px]"/>
+          <Skeleton class="h-4 w-[150px]"/>
+        </div>
+        <Skeleton class="h-8 w-[80px] rounded-md"/>
       </div>
     </div>
 
-    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-6">
+    <div v-else-if="fetchError" class="text-center text-destructive py-10">
+      <p>Error loading bookmarks:</p>
+      <p class="text-sm">{{ fetchError.message }}</p>
+      <Button variant="outline" size="sm" @click="refresh()" class="mt-4">Retry</Button>
+    </div>
+
+    <div v-else class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-6">
       <BookmarkCard
           v-for="bookmark in filteredBookmarks"
           :key="bookmark.id"
@@ -170,8 +187,10 @@ const filteredBookmarks = computed<IBookmark[]>(() => {
           :title="bookmark.title"
           :description="bookmark.description"
           :url="bookmark.url"
-          :is-favorite="bookmark.isFavorite ?? false" @toggle-favorite="handleToggleFavorite"/>
-      <p v-if="filteredBookmarks.length === 0" class="col-span-full text-center text-muted-foreground">
+          :is-favorite="bookmark.isFavorite ?? false"
+          @toggle-favorite="handleToggleFavorite"
+      />
+      <p v-if="filteredBookmarks.length === 0" class="col-span-full text-center text-muted-foreground py-10">
         No bookmarks found matching your criteria.
       </p>
     </div>
