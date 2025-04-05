@@ -7,7 +7,7 @@ import BookmarkCard from '@/components/BookmarkCard.vue'
 import type { IBookmark } from '~/types';
 // ** Remember the path change for imports **
 import { getClassificationNames } from '~/utils/classificationHierarchy';
-import { useSelectedL1Id, useSelectedL2Id } from "~/composable/useFilters";
+import { useSelectedL1Id, useSelectedL2Id } from "~/composables/useFilters";
 
 // Use useState to read the shared filter state
 const selectedL1Id = useSelectedL1Id()
