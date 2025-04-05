@@ -1,22 +1,22 @@
 <script setup lang="ts">
-// pages/index.vue (script section)
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue' // Add watch
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import BookmarkCard from '@/components/BookmarkCard.vue'
-
-// Import the Bookmark type
-import type { IBookmark } from '~/types'; // Adjust path if needed
-
-// Import the helper function to get names for the card
+import type { IBookmark } from '~/types';
+// ** Remember the path change for imports **
 import { getClassificationNames } from '~/utils/classificationHierarchy';
+import { useSelectedL1Id, useSelectedL2Id } from "~/composable/useFilters";
 
+// Use useState to read the shared filter state
+const selectedL1Id = useSelectedL1Id()
+const selectedL2Id = useSelectedL2Id();
 
-const activeTab = ref('all')
-const searchQuery = ref('')
+const activeTab = ref('all'); // Existing tab state
+const searchQuery = ref(''); // Existing search state
 
-// Define sample data using the updated Bookmark type and classificationIds
+// Sample data (ensure it includes createdAt dates)
 const bookmarks = ref<IBookmark[]>([
   {
     id: 1,
@@ -72,24 +72,61 @@ const bookmarks = ref<IBookmark[]>([
     url: 'https://www.notion.so',
     createdAt: new Date(2025, 3, 3),
   },
-])
+]);
 
-// Filtering logic - TO BE IMPLEMENTED PROPERLY LATER
-// This needs access to selected L1/L2 IDs from sidebar (via Pinia/provide/etc.)
-const filteredBookmarks = computed(() => {
-  // Placeholder: Add actual filtering based on searchQuery, activeTab, and selected sidebar categories
-  return bookmarks.value.filter(bookmark => {
-    // Basic search filter (remains the same)
-    if (searchQuery.value && !bookmark.title.toLowerCase().includes(searchQuery.value.toLowerCase())) {
-      return false;
-    }
-    // TODO: Add filtering based on activeTab ('recent' needs date logic)
-    // TODO: Add filtering based on selected L1/L2 IDs from sidebar state
+// --- Filtering Logic ---
 
-    return true; // Include if not filtered out
-  });
-})
+// Handle tab changes to potentially reset filters
+watch(activeTab, (newTab) => {
+  if (newTab === 'all') {
+    // Optional: Decide if changing tab should clear sidebar filters
+    // selectedL1Id.value = null;
+    // selectedL2Id.value = null;
+    console.log("Switched to 'All Bookmarks' tab");
+  } else if (newTab === 'recent') {
+    // Optional: Reset sidebar filters when viewing recent? Or allow combination?
+    console.log("Switched to 'Recently Added' tab");
+  }
+});
 
+
+const filteredBookmarks = computed<IBookmark[]>(() => {
+  const oneWeekAgo = new Date();
+  oneWeekAgo.setDate(oneWeekAgo.getDate() - 7);
+
+  let items = bookmarks.value;
+  const lowerSearch = searchQuery.value?.toLowerCase() || ''; // Ensure lowerSearch is always a string
+
+  // 1. Filter by Active Tab ('Recently Added')
+  if (activeTab.value === 'recent') {
+    items = items.filter(bookmark => {
+      const createdAtDate = typeof bookmark.createdAt === 'string' ? new Date(bookmark.createdAt) : bookmark.createdAt;
+      return createdAtDate && createdAtDate >= oneWeekAgo;
+    });
+  }
+
+  // 2. Filter by Selected L1 Category
+  if (selectedL1Id.value) {
+    items = items.filter(bookmark => bookmark.classificationIds.includes(selectedL1Id.value!));
+  }
+
+  // 3. Filter by Selected L2 Category
+  if (selectedL2Id.value) {
+    items = items.filter(bookmark => bookmark.classificationIds.includes(selectedL2Id.value!));
+  }
+
+  // 4. Filter by Search Query (Title, Description, AND Tags)
+  if (lowerSearch) { // Check if there is a search query
+    items = items.filter(bookmark => {
+      const tagNames = getClassificationNames(bookmark.classificationIds); // Get tag names for this bookmark
+      return bookmark.title.toLowerCase().includes(lowerSearch) ||
+          bookmark.description.toLowerCase().includes(lowerSearch) ||
+          tagNames.some(name => name.toLowerCase().includes(lowerSearch)); // Check if any tag name matches
+    });
+  }
+
+  return items;
+});
 
 </script>
 
