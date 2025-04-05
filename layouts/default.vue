@@ -33,11 +33,11 @@ const { pending: classificationsPending, error: classificationsError, refresh } 
             DATABASE_ID,
             COLLECTION_ID_CLASSIFICATIONS,
             [
-              Query.limit(100)
+              Query.limit(1000)
             ]
         );
         // Store in the useState ref
-        classifications.value = response.documents as IClassification[];
+        classifications.value = response.documents as unknown as IClassification[];
       } catch (err) {
         console.error("Error fetching classifications:", err);
         classifications.value = []; // Set empty on error
