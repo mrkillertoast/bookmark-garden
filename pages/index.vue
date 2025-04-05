@@ -4,9 +4,13 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import BookmarkCard from '@/components/BookmarkCard.vue';
 import type { IBookmark } from '~/types';
-import { getClassificationNames } from '~/utils/classificationHierarchy';
+import { getClassificationNames, loadClassifications } from '~/utils/classificationHierarchy';
 import { Skeleton } from '@/components/ui/skeleton';
-import { Query } from "appwrite"; // Import Skeleton for loading state
+import { Query } from "appwrite";
+
+onBeforeMount(() => {
+  loadClassifications()
+});
 
 // Filter/State Management (remains the same)
 const selectedL1Id = useState<string | null>('selectedL1Id', () => null);
@@ -42,13 +46,13 @@ const { data: bookmarks, pending, error: fetchError, refresh } = useAsyncData<IB
           description: doc.description,
           url: doc.url,
           imageUrl: doc.imageUrl, // Optional field
-          classificationIds: doc.classificationIds || [], // Ensure it's an array
+          level1Id: doc.level1Id || null,
+          level2Id: doc.level2Id || null,
+          level3Id: doc.level3Ids || [],
           isFavorite: doc.isFavorite ?? false, // Default if null/undefined
-          // Use Appwrite's metadata for dates if you didn't create specific attributes
           createdAt: doc.$createdAt,
-          // Add other fields as needed
         } as IBookmark));
-      } catch (err) {
+      } catch (err: unknown) {
         console.error('Error fetching bookmarks:', err);
         // Handle error appropriately, maybe return [] or throw
         return []; // Return empty array on error for now
@@ -56,10 +60,6 @@ const { data: bookmarks, pending, error: fetchError, refresh } = useAsyncData<IB
     }, {
       // Optional: Default value while loading
       default: () => [] as IBookmark[],
-      // Optional: Pick only needed parts, or use transform
-      // transform: (data) => data.map(...) // Alternative mapping location
-      // Optional: Watch reactive sources to auto-refresh
-      // watch: [searchQuery, selectedL1Id, ...] // BE CAREFUL: client-side filtering might be better
     }
 );
 
@@ -89,13 +89,13 @@ async function handleToggleFavorite(bookmarkId: number | string) {
     // Optional: Show success toast/message
     // Example: toast.success('Favorite status updated!')
 
-  } catch (err) {
+  } catch (err: unknown) {
     console.error(`Error updating favorite status for ${ bookmarkId }:`, err);
     // 3. Revert optimistic update on error
     bookmark.isFavorite = originalFavoriteStatus;
     // Show error message to user
-    // Example: toast.error('Failed to update favorite status.', { description: err.message })
-    alert(`Error updating favorite: ${ err.message || 'Unknown error' }`); // Simple alert for now
+    const errorMessage = err instanceof Error ? err.message : 'Unknown error';
+    alert(`Error updating favorite: ${ errorMessage }`);
   }
 }
 
@@ -110,23 +110,36 @@ const filteredBookmarks = computed<IBookmark[]>(() => {
   let items = bookmarks.value; // Use the fetched data
   const lowerSearch = searchQuery.value?.toLowerCase() || '';
 
-  // Apply filters... (rest of the filtering logic remains the same)
   // 1. Filter by Favorites
   if (showFavoritesOnly.value) {
     items = items.filter(bookmark => bookmark.isFavorite);
   }
-  // 2. Filter by Selected L1 Category
+
+  // 2. Filter by Selected L1 Category (support both old and new structure)
   if (selectedL1Id.value) {
-    items = items.filter(bookmark => bookmark.classificationIds.includes(selectedL1Id.value!));
+    items = items.filter(bookmark =>
+        bookmark.classificationIds.includes(selectedL1Id.value!) ||
+        bookmark.level1Id === selectedL1Id.value
+    );
   }
-  // 3. Filter by Selected L2 Category
+
+  // 3. Filter by Selected L2 Category (support both old and new structure)
   if (selectedL2Id.value) {
-    items = items.filter(bookmark => bookmark.classificationIds.includes(selectedL2Id.value!));
+    items = items.filter(bookmark =>
+        bookmark.classificationIds.includes(selectedL2Id.value!) ||
+        bookmark.level2Id === selectedL2Id.value
+    );
   }
+
   // 4. Filter by Search Query
   if (lowerSearch) {
     items = items.filter(bookmark => {
-      const tagNames = getClassificationNames(bookmark.classificationIds);
+      const tagNames = getClassificationNames([
+        ...(bookmark.level1Id ? [ bookmark.level1Id ] : []),
+        ...(bookmark.level2Id ? [ bookmark.level2Id ] : []),
+        ...(bookmark.level3Id || [])
+      ]);
+
       return bookmark.title.toLowerCase().includes(lowerSearch) ||
           bookmark.description.toLowerCase().includes(lowerSearch) ||
           tagNames.some(name => name.toLowerCase().includes(lowerSearch));
@@ -135,11 +148,10 @@ const filteredBookmarks = computed<IBookmark[]>(() => {
 
   return items;
 });
-
-
 </script>
 
 <template>
+  <!-- Template remains unchanged -->
   <div>
     <div class="flex justify-between items-center mb-6">
       <div>
@@ -183,13 +195,18 @@ const filteredBookmarks = computed<IBookmark[]>(() => {
       <Button variant="outline" size="sm" @click="refresh()" class="mt-4">Retry</Button>
     </div>
 
+
     <div v-else class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-6">
       <BookmarkCard
           v-for="bookmark in filteredBookmarks"
           :key="bookmark.id"
           :id="bookmark.id"
           :image-url="bookmark.imageUrl"
-          :classification-names="getClassificationNames(bookmark.classificationIds)"
+          :classification-names="getClassificationNames([
+                   ...(bookmark.level1Id? [ bookmark.level1Id ] : []),
+                 ...(bookmark.level2Id? [ bookmark.level2Id ] : []),
+                  ...bookmark.level3Id
+                ])"
           :title="bookmark.title"
           :description="bookmark.description"
           :url="bookmark.url"
@@ -202,7 +219,3 @@ const filteredBookmarks = computed<IBookmark[]>(() => {
     </div>
   </div>
 </template>
-
-<style scoped>
-/* Page-specific styles if needed */
-</style>

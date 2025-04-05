@@ -1,86 +1,56 @@
-import type { ICategory } from '~/types'; // Adjust path if types is not in root
+import { ref } from 'vue';
+import { type Models, Query } from 'appwrite';
+import type { IClassification } from '~/types';
 
-export const classificationHierarchy: ICategory[] = [
-	{
-		id: 'dev',
-		name: 'Development',
-		subCategories: [
-			{
-				id: 'frontend',
-				name: 'Frontend',
-				level3Tags: [
-					{ id: 'react', name: 'React' },
-					{ id: 'vue', name: 'Vue' },
-					{ id: 'tailwind', name: 'Tailwind CSS' },
-					{ id: 'nuxt', name: 'Nuxt.js' },
-				],
-			},
-			{
-				id: 'backend',
-				name: 'Backend',
-				level3Tags: [
-					{ id: 'node', name: 'Node.js' },
-					{ id: 'python', name: 'Python' },
-					{ id: 'docker', name: 'Docker' },
-				],
-			},
-			{ id: 'devops', name: 'DevOps', level3Tags: [ { id: 'ci-cd', name: 'CI/CD' } ] },
-			{ id: 'mobile', name: 'Mobile', level3Tags: [ { id: 'react-native', name: 'React Native' } ] },
-		],
-	},
-	{
-		id: 'learn',
-		name: 'Learning',
-		subCategories: [
-			{ id: 'courses', name: 'Courses' },
-			{ id: 'docs', name: 'Documentation' },
-			{ id: 'blogs', name: 'Blogs' },
-		],
-	},
-	{
-		id: 'prod',
-		name: 'Productivity',
-		subCategories: [
-			{ id: 'tools', name: 'Tools', level3Tags: [ { id: 'notion', name: 'Notion' } ] },
-			{ id: 'methods', name: 'Methods' },
-		],
-	},
-	{
-		id: 'ent',
-		name: 'Entertainment',
-		subCategories: [
-			{ id: 'movies', name: 'Movies' },
-			{ id: 'music', name: 'Music' },
-			{ id: 'games', name: 'Games' },
-		],
-	},
-];
-
-// --- Helper Functions ---
-
-// Create a flat map for easy ID-to-name lookup
-const flatHierarchyMap = new Map<string, string>();
-
-function populateMap(categories: ICategory[]) {
-	categories.forEach(l1 => {
-		flatHierarchyMap.set(l1.id, l1.name);
-		l1.subCategories.forEach(l2 => {
-			flatHierarchyMap.set(l2.id, l2.name);
-			l2.level3Tags?.forEach(l3 => {
-				flatHierarchyMap.set(l3.id, l3.name);
-			});
-		});
-	});
-}
-
-populateMap(classificationHierarchy); // Populate the map on initialization
+// Create a reactive reference for the classifications map
+const classificationMap = ref<Map<string, string>>(new Map());
 
 // Get a single name from an ID
 export function getClassificationName(id: string): string {
-	return flatHierarchyMap.get(id) || id;
+	return classificationMap.value.get(id) || id;
 }
 
 // Get multiple names from an array of IDs
-export function getClassificationNames(ids: string[]): string[] {
-	return ids.map(id => flatHierarchyMap.get(id)).filter((name): name is string => !!name);
+export function getClassificationNames(ids: string[] = []): string[] {
+
+	// Filter out undefined/null/empty values first
+	const validIds = ids.filter(id => id);
+	return validIds
+		.map(id => classificationMap.value.get(id) || id)
+}
+
+// Function to load classifications from Appwrite
+export async function loadClassifications() {
+	const { $appwrite } = useNuxtApp();
+	const config = useRuntimeConfig();
+	const DATABASE_ID = config.public.appwriteDatabaseId;
+	const COLLECTION_ID_CLASSIFICATIONS = config.public.appwriteClassificationsCollectionId;
+
+	try {
+		const response = await $appwrite.databases.listDocuments(
+			DATABASE_ID,
+			COLLECTION_ID_CLASSIFICATIONS,
+			[Query.limit(1000)],
+		);
+
+		// Reset the map
+		const newMap = new Map<string, string>();
+
+		// Populate with fetched data
+		response.documents.forEach((doc: Models.Document) => {
+			newMap.set(doc.$id, (doc as unknown as IClassification).name);
+		});
+
+		// Update the reactive map
+		classificationMap.value = newMap;
+		console.log('Classifications loaded:', classificationMap.value.size);
+		return true;
+	} catch (err) {
+		console.error('Error loading classifications:', err);
+		return false;
+	}
+}
+
+if (import.meta.client) {
+	loadClassifications();
 }
