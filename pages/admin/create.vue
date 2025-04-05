@@ -28,7 +28,7 @@ const successMessage = ref<string | null>(null);
 
 // --- Appwrite Config ---
 const DATABASE_ID = config.public.appwriteDatabaseId
-const COLLECTION_ID_BOOKMARKS = config.public.appwriteCollectionId; // e.g., 'bookmarks'
+const COLLECTION_ID_BOOKMARKS = config.public.appwriteBookmarksCollectionId; // e.g., 'bookmarks'
 
 async function handleSubmit() {
   isLoading.value = true;

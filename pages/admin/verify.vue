@@ -25,7 +25,7 @@ const config = useRuntimeConfig();
 
 // --- Appwrite Config --- (Ensure these are correct)
 const DATABASE_ID = config.public.appwriteDatabaseId;
-const COLLECTION_ID_BOOKMARKS = config.public.appwriteCollectionId;
+const COLLECTION_ID_BOOKMARKS = config.public.appwriteBookmarksCollectionId;
 
 // --- Fetch Pending Bookmarks ---
 const { data: pendingBookmarks, pending, error: fetchError, refresh } = useAsyncData<IBookmark[]>(

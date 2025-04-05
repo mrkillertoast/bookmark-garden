@@ -25,7 +25,8 @@ export default defineNuxtConfig({
 			appwriteEndpoint: process.env.NUXT_PUBLIC_APPWRITE_ENDPOINT,
 			appwriteProjectId: process.env.NUXT_PUBLIC_APPWRITE_PROJECT_ID,
 			appwriteDatabaseId: process.env.NUXT_PUBLIC_APPWRITE_DATABASE_ID,
-			appwriteCollectionId: process.env.NUXT_PUBLIC_APPWRITE_COLLECTION_ID,
+			appwriteBookmarksCollectionId: process.env.NUXT_PUBLIC_APPWRITE_BOOKMARKS_COLLECTION_ID,
+			appwriteClassificationsCollectionId: process.env.NUXT_PUBLIC_APPWRITE_CLASSIFICATIONS_COLLECTION_ID,
 		}
 	},
 })
