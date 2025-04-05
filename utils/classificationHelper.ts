@@ -13,7 +13,7 @@ export function getLevel1Categories(classifications: Ref<IClassification[] | nul
 
 export function getSubCategories(classifications: Ref<IClassification[] | null>, parentId: string | null): IClassification[] {
 	if (!parentId || !classifications.value) return [];
-	return classifications.value.filter(c => c.level === 2 && c.parentId === parentId);
+	return classifications.value.filter(c => c.parentId === parentId);
 }
 
 // Helper to get all names for a bookmark based on the new structure
