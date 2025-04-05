@@ -6,4 +6,5 @@ export interface IBookmark {
 	imageUrl?: string;
 	classificationIds: string[];
 	createdAt?: Date | string;
+	isFavorite?: boolean;
 }

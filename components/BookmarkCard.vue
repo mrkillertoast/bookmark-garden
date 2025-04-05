@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue' // Import computed if not already there
+import { computed } from 'vue'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -10,33 +10,39 @@ import {
   CardHeader,
   CardTitle,
 } from '@/components/ui/card'
-// No need to import Bookmark type here, define props directly
 
 // Define props for the card component
-interface BookmarkCardProps {
+interface IBookmarkCardProps {
   id: string | number;
   imageUrl?: string;
-  classificationNames: string[]; // Expects an array of names like ['Development', 'Frontend', 'React']
+  classificationNames: string[];
   title: string;
   description: string;
   url: string;
+  isFavorite: boolean; // Added isFavorite prop
 }
 
-const props = defineProps<BookmarkCardProps>()
+const props = defineProps<IBookmarkCardProps>()
+
+// Define the event emitted when the favorite button is clicked
+const emit = defineEmits(['toggle-favorite'])
 
 const hasImage = computed(() => !!props.imageUrl)
+
+function onFavoriteClick() {
+  emit('toggle-favorite', props.id) // Emit the event with the bookmark ID
+}
 
 </script>
 
 <template>
   <Card class="flex flex-col h-full">
-    <CardHeader v-if="hasImage" class="p-0">
-      <img
-          :src="props.imageUrl"
-          :alt="`Image for ${props.title}`"
-          class="aspect-video w-full object-cover rounded-t-lg"
-          loading="lazy"
-      >
+    <CardHeader v-if="hasImage" class="p-0 relative"> <img
+        :src="props.imageUrl"
+        :alt="`Image for ${props.title}`"
+        class="aspect-video w-full object-cover rounded-t-lg"
+        loading="lazy"
+    >
     </CardHeader>
     <CardHeader v-else class="p-0">
       <div class="aspect-video w-full bg-muted rounded-t-lg flex items-center justify-center">
@@ -65,7 +71,12 @@ const hasImage = computed(() => !!props.imageUrl)
           Visit
         </Button>
       </NuxtLink>
-      <div class="flex gap-1">
+
+      <div class="flex items-center gap-1">
+        <Button variant="ghost" size="icon" class="h-8 w-8" @click="onFavoriteClick">
+          <Icon :name="props.isFavorite ? 'lucide:star' : 'lucide:star'" :class="{'fill-current text-yellow-400': props.isFavorite}" class="h-4 w-4"/>
+          <span class="sr-only">Toggle Favorite</span>
+        </Button>
         <Button variant="ghost" size="icon" class="h-8 w-8">
           <Icon name="lucide:pencil" class="h-4 w-4" />
           <span class="sr-only">Edit</span>
@@ -78,7 +89,3 @@ const hasImage = computed(() => !!props.imageUrl)
     </CardFooter>
   </Card>
 </template>
-
-<style scoped>
-/* Styles */
-</style>

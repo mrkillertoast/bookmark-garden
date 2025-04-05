@@ -2,10 +2,8 @@
 import { ref, computed, watch } from 'vue' // Add watch
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import BookmarkCard from '@/components/BookmarkCard.vue'
 import type { IBookmark } from '~/types';
-// ** Remember the path change for imports **
 import { getClassificationNames } from '~/utils/classificationHierarchy';
 import { useSelectedL1Id, useSelectedL2Id } from "~/composables/useFilters";
 
@@ -13,7 +11,6 @@ import { useSelectedL1Id, useSelectedL2Id } from "~/composables/useFilters";
 const selectedL1Id = useSelectedL1Id()
 const selectedL2Id = useSelectedL2Id();
 
-const activeTab = ref('all'); // Existing tab state
 const searchQuery = ref(''); // Existing search state
 
 // Sample data (ensure it includes createdAt dates)
@@ -35,6 +32,8 @@ const bookmarks = ref<IBookmark[]>([
     description: 'Node.js® is a JavaScript runtime built on Chrome\'s V8 JavaScript engine.',
     url: 'https://nodejs.org/',
     createdAt: new Date(2025, 3, 1),
+    isFavorite: true
+
   },
   {
     id: 3,
@@ -71,38 +70,31 @@ const bookmarks = ref<IBookmark[]>([
     description: 'All-in-one workspace for notes, tasks, wikis, and databases.',
     url: 'https://www.notion.so',
     createdAt: new Date(2025, 3, 3),
+    isFavorite: true
   },
 ]);
 
-// --- Filtering Logic ---
 
-// Handle tab changes to potentially reset filters
-watch(activeTab, (newTab) => {
-  if (newTab === 'all') {
-    // Optional: Decide if changing tab should clear sidebar filters
-    // selectedL1Id.value = null;
-    // selectedL2Id.value = null;
-    console.log("Switched to 'All Bookmarks' tab");
-  } else if (newTab === 'recent') {
-    // Optional: Reset sidebar filters when viewing recent? Or allow combination?
-    console.log("Switched to 'Recently Added' tab");
+const showFavoritesOnly = ref(false); // New state for favorites filter
+
+// Function to handle toggling favorite status (will update backend later)
+function handleToggleFavorite(bookmarkId: number | string) {
+  const bookmark = bookmarks.value.find(b => b.id === bookmarkId);
+  if (bookmark) {
+    bookmark.isFavorite = !bookmark.isFavorite;
+    console.log(`Toggled favorite for ${ bookmarkId } to ${ bookmark.isFavorite }`);
+    // TODO: Add Appwrite database update here later
   }
-});
+}
 
 
 const filteredBookmarks = computed<IBookmark[]>(() => {
-  const oneWeekAgo = new Date();
-  oneWeekAgo.setDate(oneWeekAgo.getDate() - 7);
-
   let items = bookmarks.value;
-  const lowerSearch = searchQuery.value?.toLowerCase() || ''; // Ensure lowerSearch is always a string
+  const lowerSearch = searchQuery.value?.toLowerCase() || '';
 
-  // 1. Filter by Active Tab ('Recently Added')
-  if (activeTab.value === 'recent') {
-    items = items.filter(bookmark => {
-      const createdAtDate = typeof bookmark.createdAt === 'string' ? new Date(bookmark.createdAt) : bookmark.createdAt;
-      return createdAtDate && createdAtDate >= oneWeekAgo;
-    });
+  // 1. Filter by Favorites (if active)
+  if (showFavoritesOnly.value) {
+    items = items.filter(bookmark => bookmark.isFavorite);
   }
 
   // 2. Filter by Selected L1 Category
@@ -115,13 +107,13 @@ const filteredBookmarks = computed<IBookmark[]>(() => {
     items = items.filter(bookmark => bookmark.classificationIds.includes(selectedL2Id.value!));
   }
 
-  // 4. Filter by Search Query (Title, Description, AND Tags)
-  if (lowerSearch) { // Check if there is a search query
+  // 4. Filter by Search Query
+  if (lowerSearch) {
     items = items.filter(bookmark => {
-      const tagNames = getClassificationNames(bookmark.classificationIds); // Get tag names for this bookmark
+      const tagNames = getClassificationNames(bookmark.classificationIds);
       return bookmark.title.toLowerCase().includes(lowerSearch) ||
           bookmark.description.toLowerCase().includes(lowerSearch) ||
-          tagNames.some(name => name.toLowerCase().includes(lowerSearch)); // Check if any tag name matches
+          tagNames.some(name => name.toLowerCase().includes(lowerSearch));
     });
   }
 
@@ -134,12 +126,8 @@ const filteredBookmarks = computed<IBookmark[]>(() => {
   <div>
     <div class="flex justify-between items-center mb-6">
       <div>
-        <h1 class="text-2xl font-bold tracking-tight">
-          Bookmark Garden
-        </h1>
-        <p class="text-muted-foreground">
-          Organize and access your favorite websites
-        </p>
+        <h1 class="text-2xl font-bold tracking-tight">Bookmark Garden</h1>
+        <p class="text-muted-foreground">Organize and access your favorite websites</p>
       </div>
       <div>
         <Button>
@@ -153,24 +141,21 @@ const filteredBookmarks = computed<IBookmark[]>(() => {
       <div class="relative flex-grow max-w-xs">
         <Icon name="lucide:search" class="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground"/>
         <Input
-            v-model="searchQuery" type="search"
+            v-model="searchQuery"
+            type="search"
             placeholder="Search bookmarks..."
             class="w-full pl-9"
         />
       </div>
+
       <div class="flex items-center gap-2">
-        <Tabs v-model="activeTab" default-value="all">
-          <TabsList>
-            <TabsTrigger value="all">
-              All Bookmarks
-            </TabsTrigger>
-            <TabsTrigger value="recent">
-              Recently Added
-            </TabsTrigger>
-          </TabsList>
-        </Tabs>
-        <Button variant="outline" size="icon">
-          <Icon name="lucide:list-filter" class="h-4 w-4"/>
+        <Button
+            variant="outline"
+            @click="showFavoritesOnly = !showFavoritesOnly"
+            :class="{ 'bg-accent text-accent-foreground': showFavoritesOnly }"
+        >
+          <Icon name="lucide:star" class="mr-2 h-4 w-4" :class="{'fill-current': showFavoritesOnly}"/>
+          Favorites
         </Button>
       </div>
     </div>
@@ -181,12 +166,13 @@ const filteredBookmarks = computed<IBookmark[]>(() => {
           :key="bookmark.id"
           :id="bookmark.id"
           :image-url="bookmark.imageUrl"
-          :classification-names="getClassificationNames(bookmark.classificationIds)" :title="bookmark.title"
+          :classification-names="getClassificationNames(bookmark.classificationIds)"
+          :title="bookmark.title"
           :description="bookmark.description"
           :url="bookmark.url"
-      />
+          :is-favorite="bookmark.isFavorite ?? false" @toggle-favorite="handleToggleFavorite"/>
       <p v-if="filteredBookmarks.length === 0" class="col-span-full text-center text-muted-foreground">
-        No bookmarks found.
+        No bookmarks found matching your criteria.
       </p>
     </div>
   </div>
