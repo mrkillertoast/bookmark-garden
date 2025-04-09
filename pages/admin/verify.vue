@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue';
 import { ID, Query } from 'appwrite';
-// Re-import useAsyncData
 import { useNuxtApp, useState, useAsyncData, refreshNuxtData } from '#app';
 
 // Import Shadcn-Vue components
@@ -15,10 +14,7 @@ import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Separator } from '@/components/ui/separator';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
-// Import Icon component if you use it directly
-// import { Icon } from '#components';
 
-// Import your types (ensure IBookmark is updated)
 import type { IBookmark, IClassification } from '~/types';
 
 // Helper types for parsed data
@@ -332,85 +328,18 @@ onMounted(() => {
     </div>
 
     <div v-else class="space-y-6">
-      <Card v-for="(bookmark) in pendingBookmarks" :key="bookmark.$id">
-        <CardHeader>
-          <CardTitle class="text-xl">{{ bookmark.title || 'No Title Provided' }}</CardTitle>
-          <CardDescription>
-            <a :href="bookmark.url" target="_blank" rel="noopener noreferrer" class="text-blue-600 hover:underline break-all">
-              {{ bookmark.url }}
-            </a>
-            <Badge variant="secondary" class="ml-2 align-middle">{{ bookmark.status }}</Badge>
-          </CardDescription>
-        </CardHeader>
-        <CardContent class="space-y-4">
-          <p class="text-sm text-muted-foreground">{{ bookmark.shortDescription || 'No description.' }}</p>
-          <div v-if="bookmark.imageUrl">
-            <img :src="bookmark.imageUrl" alt="Bookmark Image" class="max-h-40 rounded-md object-cover border" @error="($event.target as HTMLImageElement).style.display='none'" />
-          </div>
-
-          <Separator />
-
-          <div>
-            <h4 class="font-semibold mb-2 text-base">LLM Classification Suggestion:</h4>
-            <div v-if="bookmark.parsedLlmClassification && bookmark.parsedLlmClassification.level1TagName">
-              <p class="text-sm bg-muted p-2 rounded">
-                <span class="font-medium">{{ bookmark.parsedLlmClassification.level1TagName }}</span>
-                <Icon name="lucide:chevron-right" class="inline h-4 w-4 mx-1" />
-                <span class="font-medium">{{ bookmark.parsedLlmClassification.level2TagName }}</span>
-                <Icon name="lucide:chevron-right" class="inline h-4 w-4 mx-1" />
-                <span v-if="bookmark.parsedLlmClassification.level3TagNames.length > 0">
-                                    [ {{ bookmark.parsedLlmClassification.level3TagNames.join(', ') }} ]
-                                </span>
-                <span v-else class="text-muted-foreground">[ No specific L3 tags ]</span>
-              </p>
-            </div>
-            <p v-else class="text-sm text-muted-foreground italic">LLM did not provide a classification.</p>
-          </div>
-
-          <div v-if="bookmark.parsedSuggestedNewTags && bookmark.parsedSuggestedNewTags.length > 0">
-            <Separator class="my-4" />
-            <div class="flex justify-between items-center mb-2">
-              <h4 class="font-semibold text-base">Suggested New Tags:</h4>
-              <Dialog>
-                <DialogTrigger as-child>
-                  <Button variant="outline" size="sm" @click="openTagVerificationDialog(bookmark)">
-                    <Icon name="lucide:tags" class="h-4 w-4 mr-2" />
-                    Verify Tags ({{ bookmark.parsedSuggestedNewTags.filter(s => s.verificationStatus === 'pending' || s.verificationStatus === 'error').length }})
-                  </Button>
-                </DialogTrigger>
-              </Dialog>
-            </div>
-            <div class="space-y-1">
-              <div v-for="(suggestion, sIndex) in bookmark.parsedSuggestedNewTags" :key="`sugg-${bookmark.$id}-${sIndex}`" class="text-xs p-1 border rounded flex justify-between items-center bg-background">
-                                <span>
-                                    "{{ suggestion.newName }}" (L{{ suggestion.intendedLevel }})
-                                    <span v-if="suggestion.intendedParentName" class="text-muted-foreground"> -> Parent: "{{ suggestion.intendedParentName }}"</span>
-                                </span>
-                <Badge :variant="suggestion.verificationStatus === 'approved' ? 'success' : suggestion.verificationStatus === 'rejected' ? 'destructive' : suggestion.verificationStatus === 'error' ? 'destructive' : 'secondary'">
-                  {{ suggestion.verificationStatus || 'Pending' }}
-                  <Icon v-if="suggestion.verificationStatus === 'error'" name="lucide:alert-circle" class="ml-1 h-3 w-3"/>
-                </Badge>
-              </div>
-            </div>
-          </div>
-
-        </CardContent>
-        <CardFooter class="flex justify-end space-x-2">
-          <Button
-              variant="default"
-              @click="handleApproveBookmark(bookmark)"
-              :disabled="isApprovingBookmark || (bookmark.parsedSuggestedNewTags?.some(s => s.verificationStatus === 'pending' || s.verificationStatus === 'error'))"
-              title="Approve this bookmark (Resolve tag suggestions first)"
-          >
-            <Icon v-if="isApprovingBookmark" name="lucide:loader-2" class="mr-2 h-4 w-4 animate-spin" />
-            Approve Bookmark
-          </Button>
-        </CardFooter>
+      <div v-for="(bookmark) in pendingBookmarks" :key="bookmark.$id">
+        <VerifyCard 
+        :bookmark="bookmark"
+        :isApprovingBookmark="isApprovingBookmark"
+        :bookmarkApprovalError="bookmarkApprovalError"
+        :selectedBookmarkForTagVerification="selectedBookmarkForTagVerification"
+        />
         <Alert v-if="bookmarkApprovalError && selectedBookmarkForTagVerification?.$id === bookmark.$id" variant="destructive" class="mt-2 text-xs mx-6 mb-4">
           <Icon name="lucide:alert-triangle" class="h-4 w-4" />
           <AlertDescription>{{ bookmarkApprovalError }}</AlertDescription>
         </Alert>
-      </Card>
+      </div>
     </div>
 
     <DialogContent v-if="selectedBookmarkForTagVerification" class="sm:max-w-[600px]">
