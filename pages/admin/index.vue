@@ -14,7 +14,7 @@ async function handleLogout() {
   <div class="flex flex-col min-h-screen bg-background text-foreground">
     <header class="sticky top-0 z-10 border-b bg-background/95 backdrop-blur">
       <div class="container mx-auto h-14 flex items-center justify-between px-4">
-        <NuxtLink to="/pages/index_2" class="font-bold">
+        <NuxtLink to="/admin" class="font-bold">
           Bookmark Admin
         </NuxtLink>
         <nav class="flex items-center gap-4">
