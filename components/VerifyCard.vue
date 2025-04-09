@@ -39,8 +39,8 @@ const props = defineProps<Props>();
       </CardDescription>
       </CardHeader>
     <CardContent class="space-y-4">
-      
-      <p class="text-sm text-muted-foreground">{{ bookmark.shortDescription || 'No description.' }}</p>
+
+      <p class="text-sm text-muted-foreground">{{ bookmark.description || 'No description.' }}</p>
 
       <Separator />
 
