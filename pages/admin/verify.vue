@@ -328,7 +328,7 @@ onMounted(() => {
     </div>
 
     <div v-else class="space-y-6">
-      <div v-for="(bookmark) in pendingBookmarks" :key="bookmark.$id" class="grid md:grid-cols-3">
+      <div v-for="(bookmark) in pendingBookmarks" :key="bookmark.$id" class="grid md:grid-cols-2">
         <VerifyCard 
         :bookmark="bookmark"
         :isApprovingBookmark="isApprovingBookmark"
