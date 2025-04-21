@@ -1,4 +1,4 @@
-import { Client, Account, Databases, Avatars } from 'appwrite';
+import { Client, Account, Databases, Avatars, Functions } from 'appwrite';
 
 export default defineNuxtPlugin(() => {
 	const config = useRuntimeConfig();
@@ -10,6 +10,7 @@ export default defineNuxtPlugin(() => {
 	const account = new Account(client);
 	const databases = new Databases(client);
 	const avatars = new Avatars(client);
+	const functions = new Functions(client);
 
 	return {
 		provide: {
@@ -18,6 +19,7 @@ export default defineNuxtPlugin(() => {
 				account,
 				databases,
 				avatars,
+				functions
 			}
 		}
 	};
