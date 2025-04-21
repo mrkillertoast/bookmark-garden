@@ -5,8 +5,8 @@ export interface IBookmark {
 	url: string;
 	imageUrl?: string;
 	level1Id?: string;
-	level2Id?: string;
-	level3Id?: string[];
+	level2Ids?: string[]; // Changed from level2Id to level2Ids (array)
+	level3Ids?: string[]; // Renamed for consistency
 	createdAt?: Date | string;
 	isFavorite?: boolean;
 }
