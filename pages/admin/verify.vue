@@ -280,12 +280,12 @@ async function handleApproveBookmark(bookmark: BookmarkWithParsedData, status: L
     // --- Update Bookmark Document ---
     console.log(`Updating bookmark ${ bookmarkId } status and classification IDs...`);
     const updateData: Partial<BookmarkWithParsedData> & { status: string } = {
-      status: 'approved',
+      status: 'verified',
       level1Id: finalL1Id,
       level2Ids: finalL2Id ? [ finalL2Id ] : [], // Store as array even if single
       level3Ids: finalL3Ids,
       llmClassification: null, // Clear the suggestion once processed
-      // suggestedNewTags: null, // Clear this too if it exists/was used
+      suggestedNewTags: null, // Clear this too if it exists/was used
     };
 
     await $appwrite.databases.updateDocument(
