@@ -1,16 +1,17 @@
 import { defineStore } from 'pinia';
-import { ref, computed } from 'vue'; // Import computed
+import { ref, computed } from 'vue';
 import { type Models, Query } from 'appwrite';
 import type { IClassification } from '~/types';
+import { useNuxtApp, useRuntimeConfig } from '#app'; // Import Nuxt composables
 
 export const useClassificationStore = defineStore('classifications', () => {
 	// --- State ---
-	// Store the full classification objects, keyed by ID
 	const classifications = ref<Map<string, IClassification>>(new Map());
 	const isLoading = ref(false);
-	const hasLoaded = ref(false);
+	const error = ref<string | null>(null); // Add error state
+	const hasLoaded = ref(false); // Track if initial load happened
 
-	// --- Computed --- map for quick name lookups (derived from classifications)
+	// --- Computed ---
 	const classificationNameMap = computed(() => {
 		const map = new Map<string, string>();
 		classifications.value.forEach((classification, id) => {
@@ -21,39 +22,19 @@ export const useClassificationStore = defineStore('classifications', () => {
 
 	// --- Getters / Methods ---
 
-	/**
-	 * Gets the full classification object for a given ID.
-	 * @param id - The classification ID.
-	 * @returns The IClassification object or undefined.
-	 */
 	function getClassification(id: string): IClassification | undefined {
 		return classifications.value.get(id);
 	}
 
-	/**
-	 * Gets the name for a single classification ID.
-	 * @param id - The classification ID.
-	 * @returns The name or the ID if not found.
-	 */
 	function getClassificationName(id: string): string {
-		return classificationNameMap.value.get(id) || id; // Use the computed map
+		return classificationNameMap.value.get(id) || id;
 	}
 
-	/**
-	 * Gets the names for an array of classification IDs.
-	 * @param ids - Array of classification IDs.
-	 * @returns Array of names (or IDs if not found).
-	 */
 	function getClassificationNames(ids: string[] = []): string[] {
 		const validIds = ids.filter(id => id);
-		return validIds.map(id => getClassificationName(id)); // Use the getter
+		return validIds.map(id => getClassificationName(id));
 	}
 
-	/**
-	 * Finds the parent classifications for a given classification ID.
-	 * @param childId - The ID of the classification whose parents are needed.
-	 * @returns An array of parent IClassification objects.
-	 */
 	function getParents(childId: string): IClassification[] {
 		const child = getClassification(childId);
 		if (!child || !child.parentIds || child.parentIds.length === 0) {
@@ -61,112 +42,131 @@ export const useClassificationStore = defineStore('classifications', () => {
 		}
 		return child.parentIds
 			.map(parentId => getClassification(parentId))
-			.filter((parent): parent is IClassification => !!parent); // Filter out undefined results
+			.filter((parent): parent is IClassification => !!parent);
 	}
 
-    /**
-	 * Checks if a classification ID descends from a specific ancestor ID.
-     * @param childId The ID to check.
-     * @param ancestorId The potential ancestor ID to check against.
-     * @returns True if childId is a descendant of ancestorId.
-     */
-    function isDescendantOf(childId: string, ancestorId: string): boolean {
-        const visited = new Set<string>(); // Prevent infinite loops in case of cycles
+	/**
+	 * Finds a classification by its name and level.
+	 * @param name The name of the classification (case-sensitive).
+	 * @param level The level (1, 2, or 3).
+	 * @returns The IClassification object or undefined if not found.
+	 */
+	function findClassificationByNameAndLevel(name: string, level: 1 | 2 | 3): IClassification | undefined {
+		// Convert Map values to an array for easier iteration/finding
+		const classificationsArray = Array.from(classifications.value.values());
+		return classificationsArray.find(c => c.name === name && c.level === level);
+	}
 
-        function check(currentId: string): boolean {
-            if (currentId === ancestorId) return true; // Direct match (shouldn't happen if checking parents)
-            if (visited.has(currentId)) return false; // Already checked this node
 
-            visited.add(currentId);
-            const parents = getParents(currentId);
+	function isDescendantOf(childId: string, ancestorId: string): boolean {
+		const visited = new Set<string>();
 
-            if (parents.length === 0) return false; // Reached root without match
+		function check(currentId: string): boolean {
+			if (currentId === ancestorId) return true;
+			if (visited.has(currentId)) return false;
 
-            // Check if any parent is the ancestor or descends from the ancestor
-            for (const parent of parents) {
-                if (parent.$id === ancestorId) return true;
-                if (check(parent.$id)) return true; // Recurse upwards
-            }
+			visited.add(currentId);
+			const parents = getParents(currentId);
 
-            return false;
-        }
+			if (parents.length === 0) return false;
 
-         // Start checking from the parents of the initial childId
-         const directParents = getParents(childId);
-         for (const parent of directParents) {
-            if (parent.$id === ancestorId) return true;
-            if (check(parent.$id)) return true;
-         }
+			for (const parent of parents) {
+				if (parent.$id === ancestorId) return true;
+				if (check(parent.$id)) return true;
+			}
 
-         return false;
-    }
+			return false;
+		}
 
+		const directParents = getParents(childId);
+		for (const parent of directParents) {
+			if (parent.$id === ancestorId) return true;
+			if (check(parent.$id)) return true;
+		}
+
+		return false;
+	}
 
 	// --- Actions ---
 
 	/**
-	 * Loads classifications from Appwrite if they haven't been loaded yet.
+	 * Fetches classifications from Appwrite.
+	 * @param forceRefresh - If true, fetches even if already loaded.
 	 */
-	async function loadClassifications() {
-		if (isLoading.value || hasLoaded.value) {
+	async function fetchClassifications(forceRefresh: boolean = false) {
+		if (isLoading.value || (hasLoaded.value && !forceRefresh)) {
+			console.log(`Skipping classification fetch: isLoading=${isLoading.value}, hasLoaded=${hasLoaded.value}, forceRefresh=${forceRefresh}`);
 			return;
 		}
 
 		isLoading.value = true;
-		console.log('Loading classifications into Pinia store...');
+		error.value = null; // Reset error before fetching
+		console.log(`Fetching classifications (forceRefresh=${forceRefresh})...`);
 
+		// Access Nuxt context inside the action
 		const { $appwrite } = useNuxtApp();
 		const config = useRuntimeConfig();
 		const DATABASE_ID = config.public.appwriteDatabaseId;
 		const COLLECTION_ID_CLASSIFICATIONS = config.public.appwriteClassificationsCollectionId;
 
+		if (!DATABASE_ID || !COLLECTION_ID_CLASSIFICATIONS) {
+			error.value = 'Appwrite configuration is missing.';
+			isLoading.value = false;
+			console.error('Missing Appwrite config for classifications.');
+			return;
+		}
+
+
 		try {
 			const response = await $appwrite.databases.listDocuments(
 				DATABASE_ID,
 				COLLECTION_ID_CLASSIFICATIONS,
-				[Query.limit(5000)], // Ensure limit is high enough
+				[Query.limit(5000)],
 			);
 
 			const newMap = new Map<string, IClassification>();
 			response.documents.forEach((doc: Models.Document) => {
-				// Map Appwrite doc to IClassification, handling the new parentIds
 				const classificationData: IClassification = {
 					$id: doc.$id,
 					name: doc.name,
 					level: doc.level,
-					parentIds: doc.parentIds || [], // Default to empty array if missing
+					parentIds: doc.parentIds || [],
 					$createdAt: doc.$createdAt,
 					$updatedAt: doc.$updatedAt,
 				};
 				newMap.set(doc.$id, classificationData);
 			});
 
-			classifications.value = newMap; // Update the main state
+			classifications.value = newMap;
 			hasLoaded.value = true;
-			console.log('Classifications loaded into Pinia store:', classifications.value.size);
-		} catch (err) {
+			console.log('Classifications loaded/refreshed into Pinia store:', classifications.value.size);
+		} catch (err: any) {
 			console.error('Error loading classifications into Pinia store:', err);
-			hasLoaded.value = false;
+			error.value = `Failed to load classifications: ${err.message || 'Unknown error'}`;
+			hasLoaded.value = false; // Mark as not loaded on error
 		} finally {
 			isLoading.value = false;
 		}
 	}
 
-	// Auto-load on client-side initialization
-	if (import.meta.client && !hasLoaded.value && !isLoading.value) {
-		loadClassifications();
-	}
+	// Auto-load on client-side initialization (if needed, but explicit fetch is often better)
+	// if (import.meta.client && !hasLoaded.value && !isLoading.value) {
+	//     fetchClassifications();
+	// }
 
 	return {
-		classifications, // Expose the raw map if needed elsewhere
-		classificationNameMap, // Expose the name map
+		classifications,
+		classificationNameMap,
 		isLoading,
+		error, // Expose error state
 		hasLoaded,
 		getClassification,
 		getClassificationName,
 		getClassificationNames,
 		getParents,
-        isDescendantOf, // Expose the hierarchy check function
-		loadClassifications,
+		findClassificationByNameAndLevel, // Expose the new finder method
+		isDescendantOf,
+		fetchClassifications, // Expose the explicit fetch method
+		// Remove loadClassifications if fetchClassifications replaces its role
 	};
 });

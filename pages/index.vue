@@ -12,7 +12,7 @@ import { Query } from "appwrite";
 const classificationStore = useClassificationStore();
 
 onBeforeMount(() => {
-  classificationStore.loadClassifications();
+  classificationStore.fetchClassifications();
 });
 
 const selectedL1Id = useState<string | null>('selectedL1Id', () => null);

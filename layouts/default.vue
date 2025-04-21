@@ -19,7 +19,7 @@ const selectedL2Id = useState<string | null>('selectedL2Id', () => null);
 onMounted(() => {
   fetchCurrentUser();
   // Ensure classifications are loaded (store handles preventing multiple loads)
-  classificationStore.loadClassifications();
+  classificationStore.fetchClassifications();
   expandedL1Id.value = selectedL1Id.value; // Sync expansion state on mount
 });
 
