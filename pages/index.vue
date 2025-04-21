@@ -4,13 +4,17 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import BookmarkCard from '@/components/BookmarkCard.vue';
 import type { IBookmark } from '~/types';
-import { getClassificationNames, loadClassifications } from '~/utils/classificationHierarchy';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Query } from "appwrite";
+import { useClassificationStore } from "~/stores/classifications";
+
+// --- Load Pinia Store ---
+const classificationStore = useClassificationStore()
 
 onBeforeMount(() => {
-  loadClassifications()
+  classificationStore.loadClassifications()
 });
+
 
 // Filter/State Management (remains the same)
 const selectedL1Id = useState<string | null>('selectedL1Id', () => null);
@@ -49,6 +53,8 @@ const { data: bookmarks, pending, error: fetchError, refresh } = useAsyncData<IB
           level1Id: doc.level1Id || null,
           level2Id: doc.level2Id || null,
           level3Id: doc.level3Ids || [],
+          // Ensure classificationIds is handled if you transition fully
+          // classificationIds: doc.classificationIds || [],
           isFavorite: doc.isFavorite ?? false, // Default if null/undefined
           createdAt: doc.$createdAt,
         } as IBookmark));
@@ -63,81 +69,73 @@ const { data: bookmarks, pending, error: fetchError, refresh } = useAsyncData<IB
     }
 );
 
-// Function to handle toggling favorite status
+// Function to handle toggling favorite status (remains the same)
 async function handleToggleFavorite(bookmarkId: number | string) {
-  // Find in the current reactive data ref
   const bookmark = bookmarks.value?.find(b => b.id === bookmarkId);
-  if (!bookmark) return; // Exit if bookmark not found
+  if (!bookmark) return;
 
   const originalFavoriteStatus = bookmark.isFavorite;
   const newFavoriteStatus = !bookmark.isFavorite;
 
-  // 1. Optimistic UI update
   bookmark.isFavorite = newFavoriteStatus;
   console.log(`Optimistically toggled favorite for ${ bookmarkId } to ${ newFavoriteStatus }`);
 
-  // 2. Persist change to Appwrite
   try {
     console.log(`Attempting to update bookmark ${ bookmarkId } favorite status to ${ newFavoriteStatus } in Appwrite...`);
     await $appwrite.databases.updateDocument(
         DATABASE_ID,
         COLLECTION_ID_BOOKMARKS,
-        bookmarkId as string, // Ensure ID is string for Appwrite
-        { isFavorite: newFavoriteStatus } // Data to update
+        bookmarkId as string,
+        { isFavorite: newFavoriteStatus }
     );
     console.log(`Successfully updated favorite status for ${ bookmarkId }`);
-    // Optional: Show success toast/message
-    // Example: toast.success('Favorite status updated!')
 
   } catch (err: unknown) {
     console.error(`Error updating favorite status for ${ bookmarkId }:`, err);
-    // 3. Revert optimistic update on error
     bookmark.isFavorite = originalFavoriteStatus;
-    // Show error message to user
     const errorMessage = err instanceof Error ? err.message : 'Unknown error';
     alert(`Error updating favorite: ${ errorMessage }`);
   }
 }
 
 
-// --- Filtering Logic (Now operates on the reactive 'bookmarks' data from useAsyncData) ---
+// --- Filtering Logic ---
 const filteredBookmarks = computed<IBookmark[]>(() => {
-  // If data is not yet loaded or empty, return empty array
   if (!bookmarks.value) {
     return [];
   }
 
-  let items = bookmarks.value; // Use the fetched data
+  let items = bookmarks.value;
   const lowerSearch = searchQuery.value?.toLowerCase() || '';
 
-  // 1. Filter by Favorites
   if (showFavoritesOnly.value) {
     items = items.filter(bookmark => bookmark.isFavorite);
   }
 
-  // 2. Filter by Selected L1 Category (support both old and new structure)
+  // Update filtering to use potentially new classificationIds if applicable
   if (selectedL1Id.value) {
     items = items.filter(bookmark =>
-        bookmark.classificationIds.includes(selectedL1Id.value!) ||
+        // Check if you have a combined `classificationIds` field
+        // (bookmark.classificationIds && bookmark.classificationIds.includes(selectedL1Id.value!)) ||
         bookmark.level1Id === selectedL1Id.value
     );
   }
 
-  // 3. Filter by Selected L2 Category (support both old and new structure)
   if (selectedL2Id.value) {
     items = items.filter(bookmark =>
-        bookmark.classificationIds.includes(selectedL2Id.value!) ||
+        // (bookmark.classificationIds && bookmark.classificationIds.includes(selectedL2Id.value!)) ||
         bookmark.level2Id === selectedL2Id.value
     );
   }
 
-  // 4. Filter by Search Query
   if (lowerSearch) {
     items = items.filter(bookmark => {
-      const tagNames = getClassificationNames([
+      // Use the store's method to get classification names
+      const tagNames = classificationStore.getClassificationNames([
         ...(bookmark.level1Id ? [ bookmark.level1Id ] : []),
         ...(bookmark.level2Id ? [ bookmark.level2Id ] : []),
         ...(bookmark.level3Id || [])
+        // ...(bookmark.classificationIds || []) // Include if using combined field
       ]);
 
       return bookmark.title.toLowerCase().includes(lowerSearch) ||
@@ -151,7 +149,6 @@ const filteredBookmarks = computed<IBookmark[]>(() => {
 </script>
 
 <template>
-  <!-- Template remains unchanged -->
   <div>
     <div class="flex justify-between items-center mb-6">
       <div>
@@ -176,10 +173,17 @@ const filteredBookmarks = computed<IBookmark[]>(() => {
             class="w-full pl-9"
         />
       </div>
+      <!-- Add Favorite filter toggle if needed -->
+      <Button variant="outline" @click="showFavoritesOnly = !showFavoritesOnly">
+        <Icon :name="showFavoritesOnly ? 'lucide:star' : 'lucide:star-off'" class="mr-2 h-4 w-4"/>
+        {{ showFavoritesOnly ? 'All' : 'Favorites' }}
+      </Button>
     </div>
 
-    <div v-if="pending" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-6">
-      <div v-for="n in 6" :key="n" class="space-y-3">
+    <!-- Skeleton Loading State -->
+    <div v-if="pending || classificationStore.isLoading"
+         class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-6">
+      <div v-for="n in 6" :key="`skel-${n}`" class="space-y-3">
         <Skeleton class="h-[125px] w-full rounded-lg"/>
         <div class="space-y-2">
           <Skeleton class="h-4 w-[200px]"/>
@@ -189,23 +193,25 @@ const filteredBookmarks = computed<IBookmark[]>(() => {
       </div>
     </div>
 
+    <!-- Error State -->
     <div v-else-if="fetchError" class="text-center text-destructive py-10">
       <p>Error loading bookmarks:</p>
       <p class="text-sm">{{ fetchError.message }}</p>
       <Button variant="outline" size="sm" @click="refresh()" class="mt-4">Retry</Button>
     </div>
 
-
+    <!-- Content Display -->
     <div v-else class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-6">
       <BookmarkCard
           v-for="bookmark in filteredBookmarks"
           :key="bookmark.id"
           :id="bookmark.id"
           :image-url="bookmark.imageUrl"
-          :classification-names="getClassificationNames([
+          :classification-names="classificationStore.getClassificationNames([ // Use store method
                    ...(bookmark.level1Id? [ bookmark.level1Id ] : []),
                  ...(bookmark.level2Id? [ bookmark.level2Id ] : []),
-                  ...bookmark.level3Id
+                  ...(bookmark.level3Id || [])
+                 // ...(bookmark.classificationIds || []) // Use if applicable
                 ])"
           :title="bookmark.title"
           :description="bookmark.description"
