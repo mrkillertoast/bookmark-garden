@@ -1,68 +1,55 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from 'vue';
-import { ID, Query } from 'appwrite';
-import { useNuxtApp, useState, useAsyncData, refreshNuxtData } from '#app';
-
-// Import Shadcn-Vue components
-import { Button } from '@/components/ui/button';
-import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
+import { ref, watch, onMounted } from 'vue';
+import { ID, Query, AppwriteException } from 'appwrite';
+import { useNuxtApp, useAsyncData, useRuntimeConfig, refreshNuxtData } from '#app';
+import { useClassificationStore } from '~/stores/classifications';
 import { Alert, AlertTitle, AlertDescription } from '@/components/ui/alert';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter, DialogTrigger, DialogClose } from '@/components/ui/dialog';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Separator } from '@/components/ui/separator';
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
-
+import VerifyCard from '~/components/VerifyCard.vue'; // Import VerifyCard
+import type { LlmClassificationStatus, ClassificationStatus } from '~/components/VerifyCard.vue'; // Import status types
 import type { IBookmark, IClassification } from '~/types';
 
-// Helper types for parsed data
+// --- Helper Types --- (Ensure these match your actual data structures)
 interface ParsedLlmClassification {
   level1TagName: string | null;
   level2TagName: string | null;
-  level3TagNames: string[]; // Array of names
+  level3TagNames: string[];
 }
-interface ParsedSuggestedNewTag {
-  newName: string;
-  intendedLevel: 1 | 2 | 3;
-  intendedParentName: string | null;
-  verificationStatus?: 'pending' | 'approved' | 'rejected' | 'error';
-  verificationMessage?: string;
-  createdTagId?: string;
-}
-type BookmarkWithParsedData = IBookmark & {
-  parsedLlmClassification?: ParsedLlmClassification | null;
-  parsedSuggestedNewTags?: ParsedSuggestedNewTag[];
-};
+
+// Keep if manual suggestions are possible, otherwise remove
+// interface ParsedSuggestedNewTag { ... }
+
+// Combined bookmark type used in this page
+type BookmarkWithParsedData = Omit<IBookmark, 'level1Id' | 'level2Ids' | 'level3Ids'> & // Omit original fields if they change type/structure after appwrite fetch
+    Models.Document & // Include Appwrite document fields like $id, $createdAt etc.
+    {
+      // Explicitly define fields expected from Appwrite document not in IBookmark base
+      status: 'pending' | 'approved' | 'rejected';
+      llmClassification?: string | null; // JSON string from Appwrite
+      suggestedNewTags?: string | null; // JSON string from Appwrite (if used)
+      // Add parsed versions
+      parsedLlmClassification?: ParsedLlmClassification | null;
+      // parsedSuggestedNewTags?: ParsedSuggestedNewTag[]; // If used
+      // Fields to be populated after approval (match IBookmark definition)
+      level1Id?: string | null;
+      level2Ids?: string[] | null; // Array
+      level3Ids?: string[] | null; // Array
+    };
 
 
 // --- Page Meta ---
 definePageMeta({
   middleware: 'auth',
-  // layout: 'admin'
 });
 
 // --- Composables ---
 const { $appwrite } = useNuxtApp();
 const config = useRuntimeConfig();
+const classificationStore = useClassificationStore();
 
 // --- State ---
-const classifications = useState<IClassification[] | null>('classifications', () => null);
 const pendingBookmarks = ref<BookmarkWithParsedData[]>([]);
-const isLoadingClassifications = ref(false); // Keep separate loading for classifications
-const errorBookmarks = ref<string | null>(null); // Local error state
-const errorClassifications = ref<string | null>(null);
-// Keep other state variables
-const isVerifyingTags = ref(false);
-const selectedBookmarkForTagVerification = ref<BookmarkWithParsedData | null>(null);
-const tagVerificationError = ref<string | null>(null);
-const tagVerificationSuccess = ref<string | null>(null);
-const editingSuggestionIndex = ref<number | null>(null);
-const modifiedTagName = ref('');
-const modifiedParentId = ref<string | undefined>(undefined);
-const isApprovingBookmark = ref(false);
-const bookmarkApprovalError = ref<string | null>(null);
+const bookmarksError = ref<string | null>(null); // For fetch errors
+const approvalState = ref<Record<string, { approving: boolean; error: string | null }>>({}); // Track approval per bookmark
 
 // --- Appwrite Config ---
 const DATABASE_ID = config.public.appwriteDatabaseId;
@@ -71,54 +58,25 @@ const COLLECTION_ID_CLASSIFICATIONS = config.public.appwriteClassificationsColle
 
 // --- Data Fetching ---
 
-// Fetch Classifications (Keep existing function)
-async function fetchClassifications() {
-  if (!classifications.value) {
-    isLoadingClassifications.value = true;
-    errorClassifications.value = null;
-    try {
-      console.log('Fetching classifications for verification page...');
-      const MAX_FETCH_LIMIT = 100;
-      let allTags: IClassification[] = [];
-      let offset = 0;
-      let hasMore = true;
-      while (hasMore) {
-        const response = await $appwrite.databases.listDocuments(
-            DATABASE_ID,
-            COLLECTION_ID_CLASSIFICATIONS,
-            [Query.limit(MAX_FETCH_LIMIT), Query.offset(offset), Query.orderAsc('name')]
-        );
-        const fetchedCount = response.documents.length;
-        if (fetchedCount > 0) {
-          allTags = allTags.concat(response.documents as IClassification[]);
-        }
-        if (fetchedCount < MAX_FETCH_LIMIT) {
-          hasMore = false;
-        } else {
-          offset += MAX_FETCH_LIMIT;
-        }
-      }
-      classifications.value = allTags;
-      console.log(`Fetched ${allTags.length} classifications.`);
-    } catch (e: any) {
-      console.error('Failed to fetch classifications:', e);
-      errorClassifications.value = 'Could not load classifications. Please try again later.';
-    } finally {
-      isLoadingClassifications.value = false;
-    }
-  } else {
-    console.log('Classifications already loaded from state.');
-    isLoadingClassifications.value = false;
+// Fetch Classifications via Store
+onMounted(async () => {
+  console.log('Verify page mounted, ensuring classifications are fetched.');
+  if (!classificationStore.hasLoaded) {
+    await classificationStore.fetchClassifications();
   }
-}
+});
 
-// Fetch Pending Bookmarks - REFACTORED useAsyncData call (No top-level await)
-const { pending: isLoadingBookmarks, data: fetchedBookmarksData, error: fetchBookmarksError, refresh: refreshBookmarks } = useAsyncData(
-    'pendingBookmarks', // Unique key
-    async () => { // The handler function
-      console.log('Executing useAsyncData handler for pendingBookmarks');
-      // Reset local error state at the start of the fetch attempt
-      errorBookmarks.value = null;
+// Fetch Pending Bookmarks
+const {
+  pending: isLoadingBookmarks,
+  error: fetchBookmarksError,
+  refresh: refreshBookmarks,
+  data: pendingBookmarksData
+} = useAsyncData<BookmarkWithParsedData[]>(
+    'pendingBookmarks',
+    async () => {
+      console.log('Fetching pending bookmarks...');
+      approvalState.value = {}; // Reset approval states on refresh
       try {
         const response = await $appwrite.databases.listDocuments(
             DATABASE_ID,
@@ -129,335 +87,301 @@ const { pending: isLoadingBookmarks, data: fetchedBookmarksData, error: fetchBoo
               Query.orderDesc('$createdAt')
             ]
         );
-        console.log(`Fetched ${response.documents.length} raw pending bookmarks.`);
+        console.log(`Fetched ${ response.documents.length } raw pending bookmarks.`);
 
-        // Parse JSON strings
         return response.documents.map((doc): BookmarkWithParsedData => {
-          const bookmark = doc as IBookmark;
-          let parsedLlmClassification: ParsedLlmClassification | null = null;
-          let parsedSuggestedNewTags: ParsedSuggestedNewTag[] = [];
+          const bookmark = doc as BookmarkWithParsedData; // Cast to include status etc.
+          let parsedLlm: ParsedLlmClassification | null = null;
 
-          // Parse llmClassification
           if (bookmark.llmClassification) {
             try {
-              parsedLlmClassification = JSON.parse(bookmark.llmClassification);
-              if (!parsedLlmClassification || typeof parsedLlmClassification !== 'object' || !Array.isArray(parsedLlmClassification.level3TagNames)) {
-                console.error(`Invalid structure llmClassification ${bookmark.$id}`);
-                parsedLlmClassification = null;
+              const parsed = JSON.parse(bookmark.llmClassification);
+              // Basic validation
+              if (parsed && typeof parsed === 'object' && Array.isArray(parsed.level3TagNames)) {
+                parsedLlm = {
+                  level1TagName: parsed.level1TagName || null,
+                  level2TagName: parsed.level2TagName || null,
+                  level3TagNames: parsed.level3TagNames || [],
+                };
+              } else {
+                console.warn(`Invalid structure in llmClassification for bookmark ${ bookmark.$id }`);
               }
-            } catch (e) { console.error(`Parse error llmClassification ${bookmark.$id}:`, e); }
+            } catch (e) {
+              console.error(`JSON Parse error for llmClassification in bookmark ${ bookmark.$id }:`, e);
+            }
           }
-          // Parse suggestedNewTags
-          if (bookmark.suggestedNewTags) {
-            try {
-              const suggestions = JSON.parse(bookmark.suggestedNewTags);
-              if (Array.isArray(suggestions)) {
-                parsedSuggestedNewTags = suggestions.map((tag: any) => ({ ...tag, verificationStatus: 'pending' }));
-              } else { console.error(`suggestedNewTags not array ${bookmark.$id}`); }
-            } catch (e) { console.error(`Parse error suggestedNewTags ${bookmark.$id}:`, e); }
-          }
-          return { ...bookmark, parsedLlmClassification, parsedSuggestedNewTags };
+          // Keep the original Appwrite document structure + add parsed data
+          return { ...bookmark, parsedLlmClassification: parsedLlm };
         });
       } catch (e: any) {
-        console.error('Failed to fetch pending bookmarks inside useAsyncData handler:', e);
-        // Set the local error ref directly here for immediate feedback in UI
-        errorBookmarks.value = `Could not load pending bookmarks: ${e.message}`;
-        // Return empty array on error so 'data' ref is not null/undefined
-        return [];
+        console.error('Failed to fetch pending bookmarks:', e);
+        throw new Error(`Could not load pending bookmarks: ${ e.message || 'Unknown error' }`); // Throw to let useAsyncData handle error state
       }
     }, {
-      watch: [classifications] // Keep watch for now, consider removing if causing issues
-      // server: true // Default is true, can be explicit
+      server: false, // Fetch client-side
+      default: () => [], // Default value while loading or on error
+      watch: [ () => classificationStore.hasLoaded ] // Re-fetch if classifications load state changes (optional, refresh might be better)
     }
-); // REMOVED await here
+);
 
-// Watch the data ref returned by useAsyncData and update the local pendingBookmarks ref
-watch(fetchedBookmarksData, (newData) => {
-  console.log('fetchedBookmarksData watcher updating pendingBookmarks');
+// Update local state from useAsyncData
+watch(pendingBookmarksData, (newData) => {
   pendingBookmarks.value = newData || [];
-  // Clear the local error if data loads successfully
-  if (newData) {
-    errorBookmarks.value = null;
-  }
+  if (newData) bookmarksError.value = null; // Clear fetch error on success
 }, { immediate: true });
 
-// Watch the error ref from useAsyncData to potentially update local error state
-// This might be redundant if the catch block already sets errorBookmarks.value
 watch(fetchBookmarksError, (newError) => {
   if (newError) {
-    console.error('Error detected by fetchBookmarksError watcher:', newError);
-    // Update local error state if it wasn't already set in the catch block
-    if (!errorBookmarks.value) {
-      errorBookmarks.value = newError.message || 'An error occurred loading bookmarks via useAsyncData error ref.';
-    }
+    bookmarksError.value = newError.message || 'An error occurred loading bookmarks.';
+  } else {
+    bookmarksError.value = null; // Clear error if fetch succeeds later
   }
-  // We could clear the error here if the fetch succeeds later,
-  // but the data watcher already does that.
-  // else { errorBookmarks.value = null; }
 }, { immediate: true });
 
-
-// --- Computed Properties ---
-// (Keep computed properties: availableLevel1Tags, availableLevel2Tags, parentTagOptions)
-const availableLevel1Tags = computed(() => classifications.value?.filter(t => t.level === 1) || []);
-const availableLevel2Tags = computed(() => classifications.value?.filter(t => t.level === 2) || []);
-const parentTagOptions = computed(() => {
-  if (editingSuggestionIndex.value === null || !selectedBookmarkForTagVerification.value?.parsedSuggestedNewTags) return [];
-  const suggestion = selectedBookmarkForTagVerification.value.parsedSuggestedNewTags[editingSuggestionIndex.value];
-  if (!suggestion || suggestion.intendedLevel === 1) return [];
-  if (suggestion.intendedLevel === 2) return availableLevel1Tags.value;
-  if (suggestion.intendedLevel === 3) return availableLevel2Tags.value;
-  return [];
-});
-
-
 // --- Methods ---
-// (Keep methods: openTagVerificationDialog, startEditingSuggestion, cancelEditingSuggestion, etc.)
-// --- Placeholder API Call Functions ---
-// (Keep placeholder functions: apiApproveNewTag, apiRejectNewTag, apiApproveBookmark)
-// IMPORTANT: Ensure apiApproveNewTag updates classifications.value or calls a refresh
-async function apiApproveNewTag(bookmarkId: string, suggestionIndex: number, tagDetails: { name: string, level: number, parentId: string | null }): Promise<{ success: boolean; message?: string; createdTag?: IClassification }> {
-  console.log('Calling API: apiApproveNewTag', { bookmarkId, suggestionIndex, tagDetails });
-  isVerifyingTags.value = true;
-  tagVerificationError.value = null;
-  tagVerificationSuccess.value = null;
-  await new Promise(resolve => setTimeout(resolve, 1000));
-  const simulatedSuccess = Math.random() > 0.2;
-  if (simulatedSuccess) {
-    const newTagId = `new_tag_${Date.now()}`;
-    const createdTag: IClassification = { ...tagDetails, $id: newTagId, $createdAt: new Date().toISOString(), $updatedAt: new Date().toISOString() };
-    console.log('Simulated API Success: Tag created', createdTag);
-    // --- IMPORTANT: Update classifications state ---
-    classifications.value = [...(classifications.value || []), createdTag];
-    // ---
-    if (selectedBookmarkForTagVerification.value?.parsedSuggestedNewTags) {
-      selectedBookmarkForTagVerification.value.parsedSuggestedNewTags[suggestionIndex].verificationStatus = 'approved';
-      selectedBookmarkForTagVerification.value.parsedSuggestedNewTags[suggestionIndex].createdTagId = newTagId;
-      selectedBookmarkForTagVerification.value.parsedSuggestedNewTags[suggestionIndex].verificationMessage = 'Approved & Created!';
+
+/**
+ * Sets the approval state for a specific bookmark.
+ */
+function setApprovalStatus(bookmarkId: string, approving: boolean, error: string | null = null) {
+  approvalState.value[ bookmarkId ] = { approving, error };
+}
+
+/**
+ * Creates a new classification tag if it doesn't exist.
+ * IMPORTANT: This function now relies on the store being up-to-date.
+ * It checks the store *before* attempting creation.
+ */
+async function findOrCreateTag(
+    name: string,
+    level: 1 | 2 | 3,
+    parentIds: string[] = [] // Parent IDs required for L2/L3
+): Promise<string | null> { // Returns the ID of the tag (existing or new) or null on error
+  console.log(`findOrCreateTag called: Name=${ name }, Level=${ level }, ParentIDs=${ parentIds.join(',') }`);
+
+  // 1. Check if tag already exists (use the store's finder)
+  const existingTag = classificationStore.findClassificationByNameAndLevel(name, level);
+
+  if (existingTag) {
+    // 2. If exists, verify parentage if applicable (L2/L3)
+    if (level > 1) {
+      const requiredParentId = parentIds[ 0 ]; // Assume single parent for now based on structure
+      if (!requiredParentId) {
+        console.error(`Cannot verify parentage for existing L${ level } tag "${ name }" (${ existingTag.$id }): Required parent ID is missing.`);
+        // This indicates a logic error in how handleApproveBookmark calls this
+        return null; // Critical error
+      }
+      // Check if the *existing* tag already has the *required* parent
+      if (existingTag.parentIds?.includes(requiredParentId)) {
+        console.log(`Existing L${ level } tag "${ name }" (${ existingTag.$id }) found with correct parent ${ requiredParentId }. Using existing.`);
+        return existingTag.$id;
+      } else {
+        // THIS IS THE HIERARCHY CONFLICT CASE DETECTED EARLIER
+        // VerifyCard should prevent calling approve if this case occurs for an *existing* tag.
+        // If we reach here, it implies L1 or L2 was *newly created* in this approval cycle,
+        // and now we are creating a child under it. The *existing* tag with the same name/level
+        // belongs elsewhere. We MUST create a *new* tag.
+        console.warn(`Existing L${ level } tag "${ name }" (${ existingTag.$id }) found, but under different parent(s) (${ existingTag.parentIds?.join(',') }). Required parent: ${ requiredParentId }. Creating NEW tag.`);
+        // Fall through to creation logic below.
+      }
+    } else {
+      // L1 tag exists, no parent check needed.
+      console.log(`Existing L1 tag "${ name }" (${ existingTag.$id }) found. Using existing.`);
+      return existingTag.$id;
     }
-    tagVerificationSuccess.value = `Tag "${tagDetails.name}" approved successfully!`;
-    isVerifyingTags.value = false;
-    return { success: true, createdTag };
-  } else {
-    console.error('Simulated API Error: Failed to approve tag');
-    const errorMessage = 'Failed to approve tag on server (Simulated).';
-    if (selectedBookmarkForTagVerification.value?.parsedSuggestedNewTags) {
-      selectedBookmarkForTagVerification.value.parsedSuggestedNewTags[suggestionIndex].verificationStatus = 'error';
-      selectedBookmarkForTagVerification.value.parsedSuggestedNewTags[suggestionIndex].verificationMessage = errorMessage;
-    }
-    tagVerificationError.value = errorMessage;
-    isVerifyingTags.value = false;
-    return { success: false, message: errorMessage };
+  }
+
+  // 3. If tag doesn't exist (or exists under wrong parent), create it
+  console.log(`Tag "${ name }" (L${ level }) not found or has wrong parent. Creating new tag...`);
+  try {
+    const newTagDoc = await $appwrite.databases.createDocument(
+        DATABASE_ID,
+        COLLECTION_ID_CLASSIFICATIONS,
+        ID.unique(),
+        {
+          name: name,
+          level: level,
+          // Ensure parentIds is always an array, even if empty for L1
+          parentIds: level > 1 ? parentIds.filter(id => id) : [], // Filter out potential undefined/null IDs
+        }
+    );
+    console.log(`Successfully created L${ level } tag "${ name }" with ID: ${ newTagDoc.$id }`);
+    // IMPORTANT: Refresh the store IMMEDIATELY so subsequent findOrCreateTag calls see the new tag
+    await classificationStore.fetchClassifications(true); // Force refresh
+    return newTagDoc.$id;
+  } catch (e: any) {
+    console.error(`Failed to create L${ level } tag "${ name }":`, e);
+    // Throw specific error to be caught in handleApproveBookmark
+    throw new Error(`Failed to create L${ level } tag "${ name }": ${ e.message }`);
   }
 }
-async function apiRejectNewTag(bookmarkId: string, suggestionIndex: number): Promise<{ success: boolean; message?: string }> {
-  console.log('Calling API: apiRejectNewTag', { bookmarkId, suggestionIndex });
-  isVerifyingTags.value = true;
-  tagVerificationError.value = null;
-  tagVerificationSuccess.value = null;
-  await new Promise(resolve => setTimeout(resolve, 500));
-  console.log('Simulated API Success: Tag rejected');
-  if (selectedBookmarkForTagVerification.value?.parsedSuggestedNewTags) {
-    selectedBookmarkForTagVerification.value.parsedSuggestedNewTags[suggestionIndex].verificationStatus = 'rejected';
-    selectedBookmarkForTagVerification.value.parsedSuggestedNewTags[suggestionIndex].verificationMessage = 'Rejected.';
+
+
+/**
+ * Handles the approval of a bookmark based on the validated LLM status.
+ */
+async function handleApproveBookmark(bookmark: BookmarkWithParsedData, status: LlmClassificationStatus) {
+  const bookmarkId = bookmark.$id;
+  if (!bookmarkId) {
+    console.error('Cannot approve bookmark: Missing ID.');
+    return;
   }
-  tagVerificationSuccess.value = `Tag suggestion rejected.`;
-  isVerifyingTags.value = false;
-  return { success: true };
-}
-async function apiApproveBookmark(bookmarkId: string, primaryClassification: ParsedLlmClassification | null): Promise<{ success: boolean; message?: string }> {
-  console.log('Calling API: apiApproveBookmark', { bookmarkId, primaryClassification });
-  isApprovingBookmark.value = true;
-  bookmarkApprovalError.value = null;
-  await new Promise(resolve => setTimeout(resolve, 1500));
-  const simulatedSuccess = Math.random() > 0.2;
-  if (simulatedSuccess) {
-    console.log('Simulated API Success: Bookmark approved');
-    // Use the refresh function from useAsyncData to refetch bookmarks
+
+  console.log(`--- Approving Bookmark ${ bookmarkId } ---`);
+  setApprovalStatus(bookmarkId, true, null);
+
+  // Double check hierarchy validity (defense-in-depth)
+  if (!status.isValidOverallHierarchy) {
+    console.error(`Approval aborted for ${ bookmarkId }: Hierarchy invalid (checked again in handler).`);
+    setApprovalStatus(bookmarkId, false, "Hierarchy conflict detected.");
+    return;
+  }
+  if (!status.level1) {
+    console.error(`Approval aborted for ${ bookmarkId }: Missing L1 classification status.`);
+    setApprovalStatus(bookmarkId, false, "L1 classification missing.");
+    return;
+  }
+
+
+  let finalL1Id: string | null = null;
+  let finalL2Id: string | null = null; // Single L2 based on LLM suggestion structure
+  const finalL3Ids: string[] = [];
+
+  try {
+    // --- Process Level 1 ---
+    console.log(`Processing L1: ${ status.level1.name } (${ status.level1.status })`);
+    finalL1Id = await findOrCreateTag(status.level1.name, 1, []);
+    if (!finalL1Id) throw new Error(`Failed to find or create L1 tag "${ status.level1.name }"`);
+    console.log(` > L1 ID: ${ finalL1Id }`);
+
+    // --- Process Level 2 ---
+    if (status.level2) {
+      console.log(`Processing L2: ${ status.level2.name } (${ status.level2.status })`);
+      // Parent ID for L2 is always the finalL1Id we just obtained/confirmed
+      finalL2Id = await findOrCreateTag(status.level2.name, 2, [ finalL1Id ]);
+      if (!finalL2Id) throw new Error(`Failed to find or create L2 tag "${ status.level2.name }"`);
+      console.log(` > L2 ID: ${ finalL2Id }`);
+
+      // --- Process Level 3 ---
+      if (status.level3.length > 0) {
+        console.log(`Processing L3 tags (${ status.level3.length })...`);
+        // Parent ID for all L3 tags is the finalL2Id
+        for (const l3TagStatus of status.level3) {
+          console.log(`  Processing L3: ${ l3TagStatus.name } (${ l3TagStatus.status })`);
+          const l3Id = await findOrCreateTag(l3TagStatus.name, 3, [ finalL2Id ]);
+          if (!l3Id) throw new Error(`Failed to find or create L3 tag "${ l3TagStatus.name }"`);
+          finalL3Ids.push(l3Id);
+          console.log(`   > L3 ID: ${ l3Id }`);
+        }
+        console.log(` > Final L3 IDs: ${ finalL3Ids.join(', ') }`);
+      }
+    }
+
+    // --- Update Bookmark Document ---
+    console.log(`Updating bookmark ${ bookmarkId } status and classification IDs...`);
+    const updateData: Partial<BookmarkWithParsedData> & { status: string } = {
+      status: 'approved',
+      level1Id: finalL1Id,
+      level2Ids: finalL2Id ? [ finalL2Id ] : [], // Store as array even if single
+      level3Ids: finalL3Ids,
+      llmClassification: null, // Clear the suggestion once processed
+      // suggestedNewTags: null, // Clear this too if it exists/was used
+    };
+
+    await $appwrite.databases.updateDocument(
+        DATABASE_ID,
+        COLLECTION_ID_BOOKMARKS,
+        bookmarkId,
+        updateData
+    );
+
+    console.log(`--- Bookmark ${ bookmarkId } Approved Successfully ---`);
+    setApprovalStatus(bookmarkId, false, null); // Clear loading state
+
+    // Refresh the list of pending bookmarks
     await refreshBookmarks();
-    isApprovingBookmark.value = false;
-    return { success: true };
-  } else {
-    console.error('Simulated API Error: Failed to approve bookmark');
-    const errorMessage = 'Failed to approve bookmark on server (Simulated).';
-    bookmarkApprovalError.value = errorMessage;
-    isApprovingBookmark.value = false;
-    return { success: false, message: errorMessage };
+
+  } catch (error: any) {
+    console.error(`Error approving bookmark ${ bookmarkId }:`, error);
+    setApprovalStatus(bookmarkId, false, error.message || 'An unknown error occurred during approval.');
+    // Note: Store might be in an inconsistent state if tag creation failed midway.
+    // A more robust solution might involve transactions or cleanup logic.
   }
 }
 
-// --- Event Handlers ---
-// (Keep event handlers: openTagVerificationDialog, startEditingSuggestion, cancelEditingSuggestion, handleApproveSuggestion, handleRejectSuggestion, handleApproveBookmark)
-function openTagVerificationDialog(bookmark: BookmarkWithParsedData) { /* ... */ }
-function startEditingSuggestion(index: number) { /* ... */ }
-function cancelEditingSuggestion() { /* ... */ }
-async function handleApproveSuggestion(index: number, isModification: boolean = false) { /* ... */ }
-async function handleRejectSuggestion(index: number) { /* ... */ }
-async function handleApproveBookmark(bookmark: BookmarkWithParsedData) { /* ... */ }
+/**
+ * Handles rejecting a bookmark.
+ */
+async function handleRejectBookmark(bookmarkId: string) {
+  if (!bookmarkId) {
+    console.error('Cannot reject bookmark: Missing ID.');
+    return;
+  }
+  console.log(`--- Rejecting Bookmark ${ bookmarkId } ---`);
+  setApprovalStatus(bookmarkId, true, null); // Use approving state for loading indication
 
+  try {
+    await $appwrite.databases.updateDocument(
+        DATABASE_ID,
+        COLLECTION_ID_BOOKMARKS,
+        bookmarkId,
+        { status: 'rejected' }
+    );
+    console.log(`--- Bookmark ${ bookmarkId } Rejected Successfully ---`);
+    setApprovalStatus(bookmarkId, false, null);
+    await refreshBookmarks(); // Refresh the list
+  } catch (error: any) {
+    console.error(`Error rejecting bookmark ${ bookmarkId }:`, error);
+    setApprovalStatus(bookmarkId, false, error.message || 'An unknown error occurred during rejection.');
+  }
+}
 
-// --- Lifecycle Hooks ---
-onMounted(() => {
-  fetchClassifications(); // Fetch classifications on mount
-});
+// Placeholder for potential manual edit flow trigger
+function handleManualEditBookmark(bookmark: BookmarkWithParsedData) {
+  console.log(`Manual edit triggered for bookmark: ${ bookmark.$id }`, bookmark);
+  // Implement navigation or modal logic here
+  alert(`Manual edit for "${ bookmark.title }" not implemented yet.`);
+}
 
 </script>
 
 <template>
-  <div class="container mx-auto px-4 py-8">
+  <div class="container mx-auto py-8 px-4">
     <h1 class="text-3xl font-bold mb-6">Verify Pending Bookmarks</h1>
 
-    <div v-if="isLoadingBookmarks || isLoadingClassifications" class="text-center py-10">
-      <p>Loading data...</p>
-      <Icon name="lucide:loader-2" class="h-8 w-8 animate-spin text-primary mx-auto" />
+    <!-- Loading Indicator -->
+    <div v-if="isLoadingBookmarks" class="text-center py-10">
+      <p>Loading pending bookmarks...</p>
     </div>
-    <div v-else-if="errorBookmarks || errorClassifications" class="space-y-4">
-      <Alert v-if="errorBookmarks" variant="destructive">
-        <Icon name="lucide:alert-triangle" class="h-4 w-4" />
-        <AlertTitle>Error Loading Bookmarks</AlertTitle>
-        <AlertDescription>{{ errorBookmarks }}</AlertDescription>
-      </Alert>
-      <Alert v-if="errorClassifications" variant="destructive">
-        <Icon name="lucide:alert-triangle" class="h-4 w-4" />
-        <AlertTitle>Error Loading Classifications</AlertTitle>
-        <AlertDescription>{{ errorClassifications }}</AlertDescription>
-      </Alert>
-    </div>
+
+
+    <!-- Classification Store Error -->
+    <Alert v-else-if="classificationStore.error && !classificationStore.isLoading" variant="destructive" class="mb-6">
+      <AlertTitle>Error Loading Classifications</AlertTitle>
+      <AlertDescription>
+        Could not load classification tags needed for verification: {{ classificationStore.error }}
+        <Button variant="outline" size="sm" class="ml-4" @click="classificationStore.fetchClassifications(true)">Retry
+        </Button>
+      </AlertDescription>
+    </Alert>
+
+    <!-- No Pending Bookmarks -->
     <div v-else-if="pendingBookmarks.length === 0" class="text-center py-10 text-muted-foreground">
       <p>No pending bookmarks found.</p>
     </div>
 
-    <div v-else class="space-y-6">
-      <div v-for="(bookmark) in pendingBookmarks" :key="bookmark.$id" class="grid md:grid-cols-2">
-        <VerifyCard 
-        :bookmark="bookmark"
-        :isApprovingBookmark="isApprovingBookmark"
-        :bookmarkApprovalError="bookmarkApprovalError"
-        :selectedBookmarkForTagVerification="selectedBookmarkForTagVerification"
-        />
-        <Alert v-if="bookmarkApprovalError && selectedBookmarkForTagVerification?.$id === bookmark.$id" variant="destructive" class="mt-2 text-xs mx-6 mb-4">
-          <Icon name="lucide:alert-triangle" class="h-4 w-4" />
-          <AlertDescription>{{ bookmarkApprovalError }}</AlertDescription>
-        </Alert>
-      </div>
+    <!-- Pending Bookmarks List -->
+    <div class="space-y-6">
+      <VerifyCard
+          v-for="bookmark in pendingBookmarks"
+          :key="bookmark.$id"
+          :bookmark="bookmark"
+          :is-approving="approvalState[bookmark.$id]?.approving ?? false"
+          :approval-error="approvalState[bookmark.$id]?.error ?? null"
+          :handle-approve="handleApproveBookmark"
+          :handle-reject="handleRejectBookmark"
+          :handle-manual-edit="handleManualEditBookmark"
+      />
     </div>
-
-    <DialogContent v-if="selectedBookmarkForTagVerification" class="sm:max-w-[600px]">
-      <DialogHeader>
-        <DialogTitle>Verify Suggested Tags</DialogTitle>
-        <DialogDescription>
-          For bookmark: <a :href="selectedBookmarkForTagVerification.url" target="_blank" rel="noopener noreferrer" class="text-blue-600 hover:underline break-all ml-1">{{ selectedBookmarkForTagVerification.title || selectedBookmarkForTagVerification.url }}</a>
-        </DialogDescription>
-      </DialogHeader>
-
-      <Alert v-if="tagVerificationError" variant="destructive" class="my-2">
-        <Icon name="lucide:alert-triangle" class="h-4 w-4" />
-        <AlertDescription>{{ tagVerificationError }}</AlertDescription>
-      </Alert>
-      <Alert v-if="tagVerificationSuccess" variant="success" class="my-2">
-        <Icon name="lucide:check-circle" class="h-4 w-4" />
-        <AlertDescription>{{ tagVerificationSuccess }}</AlertDescription>
-      </Alert>
-
-      <div class="space-y-4 max-h-[60vh] overflow-y-auto p-1">
-        <div v-for="(suggestion, index) in selectedBookmarkForTagVerification.parsedSuggestedNewTags" :key="`verify-${selectedBookmarkForTagVerification.$id}-${index}`" class="p-3 border rounded bg-card">
-          <div class="flex justify-between items-center mb-2">
-            <p class="font-medium">Suggestion #{{ index + 1 }}</p>
-            <Badge :variant="suggestion.verificationStatus === 'approved' ? 'success' : suggestion.verificationStatus === 'rejected' ? 'destructive' : suggestion.verificationStatus === 'error' ? 'destructive' : 'secondary'">
-              {{ suggestion.verificationStatus || 'Pending' }}
-              <Icon v-if="suggestion.verificationStatus === 'error'" name="lucide:alert-circle" class="ml-1 h-3 w-3"/>
-            </Badge>
-          </div>
-
-          <div class="text-sm space-y-1 bg-muted/50 p-2 rounded mb-3">
-            <p><strong>Suggested Name:</strong> {{ suggestion.newName }}</p>
-            <p><strong>Intended Level:</strong> {{ suggestion.intendedLevel }}</p>
-            <p><strong>Intended Parent:</strong> {{ suggestion.intendedParentName || 'None (Level 1)' }}</p>
-            <p v-if="suggestion.verificationMessage" :class="{'text-red-600': suggestion.verificationStatus === 'error', 'text-green-600': suggestion.verificationStatus === 'approved', 'text-muted-foreground': suggestion.verificationStatus === 'rejected'}">
-              <strong class="capitalize">{{ suggestion.verificationStatus }}:</strong> {{ suggestion.verificationMessage }}
-            </p>
-          </div>
-
-          <div v-if="editingSuggestionIndex === index" class="space-y-3 border-t pt-3 mt-3">
-            <h5 class="font-semibold text-sm">Modify Suggestion:</h5>
-            <div>
-              <Label :for="`tagName-${index}`" class="text-xs">Tag Name</Label>
-              <Input :id="`tagName-${index}`" v-model="modifiedTagName" />
-            </div>
-            <div v-if="suggestion.intendedLevel > 1">
-              <Label :for="`tagParent-${index}`" class="text-xs">Parent Tag (L{{ suggestion.intendedLevel - 1 }})</Label>
-              <Select v-model="modifiedParentId">
-                <SelectTrigger :id="`tagParent-${index}`">
-                  <SelectValue placeholder="Select Parent Tag" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectGroup>
-                    <SelectLabel>Level {{ suggestion.intendedLevel - 1 }} Tags</SelectLabel>
-                    <SelectItem v-for="tag in parentTagOptions" :key="tag.$id" :value="tag.$id">
-                      {{ tag.name }}
-                    </SelectItem>
-                    <SelectItem v-if="!parentTagOptions.length" value="no-parents" disabled>
-                      No suitable parent tags found.
-                    </SelectItem>
-                  </SelectGroup>
-                </SelectContent>
-              </Select>
-            </div>
-            <div class="flex justify-end space-x-2">
-              <Button variant="ghost" size="sm" @click="cancelEditingSuggestion">Cancel</Button>
-              <Button
-                  size="sm"
-                  @click="handleApproveSuggestion(index, true)"
-                  :disabled="isVerifyingTags || !modifiedTagName || (suggestion.intendedLevel > 1 && !modifiedParentId)"
-              >
-                <Icon v-if="isVerifyingTags" name="lucide:loader-2" class="mr-2 h-4 w-4 animate-spin" />
-                Save & Approve
-              </Button>
-            </div>
-          </div>
-
-          <div v-else-if="suggestion.verificationStatus === 'pending' || suggestion.verificationStatus === 'error'" class="flex justify-end space-x-2 mt-2">
-            <TooltipProvider :delay-duration="200">
-              <Tooltip>
-                <TooltipTrigger as-child>
-                  <Button
-                      variant="outline" size="icon-sm"
-                      @click="startEditingSuggestion(index)"
-                      :disabled="isVerifyingTags"
-                      class="h-7 w-7"
-                  >
-                    <Icon name="lucide:pencil" class="h-3.5 w-3.5" />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent><p>Edit before approving</p></TooltipContent>
-              </Tooltip>
-            </TooltipProvider>
-            <Button
-                variant="destructive" size="sm"
-                @click="handleRejectSuggestion(index)"
-                :disabled="isVerifyingTags"
-            >
-              <Icon name="lucide:x" class="mr-1 h-4 w-4" /> Reject
-            </Button>
-            <Button
-                variant="success" size="sm"
-                @click="handleApproveSuggestion(index, false)"
-                :disabled="isVerifyingTags"
-            >
-              <Icon v-if="isVerifyingTags" name="lucide:loader-2" class="mr-2 h-4 w-4 animate-spin" />
-              <Icon v-else name="lucide:check" class="mr-1 h-4 w-4" /> Approve As Is
-            </Button>
-          </div>
-
-        </div>
-      </div>
-
-      <DialogFooter>
-        <DialogClose as-child>
-          <Button variant="outline">Close</Button>
-        </DialogClose>
-      </DialogFooter>
-    </DialogContent>
-
   </div>
 </template>
