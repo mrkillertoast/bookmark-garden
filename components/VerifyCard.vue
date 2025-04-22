@@ -7,7 +7,8 @@ import { Separator } from '@/components/ui/separator';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Icon } from '#components'; // Use auto-imported Icon
 
-import type { BookmarkWithParsedData, IClassification } from '~/types';
+// Adjust the import as needed based on your actual type definitions
+import type { Bookmark as BookmarkWithParsedData, IClassification } from '~/types';
 import { useClassificationStore } from '~/stores/classifications';
 
 // --- Props ---
@@ -41,7 +42,7 @@ export interface ClassificationStatus {
 // Interface for the overall status of the LLM suggestion
 export interface LlmClassificationStatus {
   level1: ClassificationStatus | null;
-  level2: ClassificationStatus | null;
+  level2: ClassificationStatus[];
   level3: ClassificationStatus[];
   isValidOverallHierarchy: boolean; // Is the entire suggested L1->L2->L3 chain valid?
   hasSuggestion: boolean; // Does the bookmark have any LLM suggestion?
@@ -50,7 +51,7 @@ export interface LlmClassificationStatus {
 const llmClassificationStatus = computed((): LlmClassificationStatus => {
   const result: LlmClassificationStatus = {
     level1: null,
-    level2: null,
+    level2: [],
     level3: [],
     isValidOverallHierarchy: true, // Assume valid initially
     hasSuggestion: false,
@@ -99,46 +100,47 @@ const llmClassificationStatus = computed((): LlmClassificationStatus => {
   let currentL2HierarchyValid = true;
 
   // --- Level 2 Check ---
-  if (llmSuggest.level2TagName) {
-    const l2Name = llmSuggest.level2TagName;
-    const existingL2 = classificationStore.findClassificationByNameAndLevel(l2Name, 2);
-    let l2Status: 'existing' | 'new' = existingL2 ? 'existing' : 'new';
-    let l2Id = existingL2?.$id;
-    let parentIsValid = true;
+  if (llmSuggest.level2TagNames?.length > 0) {
+    llmSuggest.level2TagNames.forEach((l2Name: string) => {
+      const existingL2 = classificationStore.findClassificationByNameAndLevel(l2Name, 2);
+      let l2Status: 'existing' | 'new' = existingL2 ? 'existing' : 'new';
+      let l2Id = existingL2?.$id;
+      let parentIsValid = true;
 
-    if (existingL2) {
-      // L2 exists. Check if its parent is the *intended* L1 (even if L1 is new, it won't have an ID yet).
-      // The actual creation logic will handle assigning the parent ID correctly.
-      // Here, we only validate if L2 *already exists* and is *already* parented under the *existing* L1.
-      if (currentL1Id) { // Only check parentage if L1 also exists
-        parentIsValid = existingL2.parentIds?.includes(currentL1Id) ?? false;
-        if (!parentIsValid) {
-          console.warn(`Hierarchy mismatch: Existing L2 "${l2Name}" (${existingL2.$id}) is not parented under existing L1 "${l1Name}" (${currentL1Id}). Found parents: ${existingL2.parentIds?.join(', ')}`);
-          // Tag exists, but under wrong parent. Crucially, mark hierarchy invalid.
-          result.isValidOverallHierarchy = false;
+      if (existingL2) {
+        // L2 exists. Check if its parent is the *intended* L1 (even if L1 is new, it won't have an ID yet).
+        // The actual creation logic will handle assigning the parent ID correctly.
+        // Here, we only validate if L2 *already exists* and is *already* parented under the *existing* L1.
+        if (currentL1Id) { // Only check parentage if L1 also exists
+          parentIsValid = existingL2.parentIds?.includes(currentL1Id) ?? false;
+          if (!parentIsValid) {
+            console.warn(`Hierarchy mismatch: Existing L2 "${ l2Name }" (${ existingL2.$id }) is not parented under existing L1 "${ l1Name }" (${ currentL1Id }). Found parents: ${ existingL2.parentIds?.join(', ') }`);
+            // Tag exists, but under wrong parent. Crucially, mark hierarchy invalid.
+            result.isValidOverallHierarchy = false;
+          }
+        } else if (result.level1?.status === 'new') {
+          // L2 exists, but the intended L1 parent is new.
+          // This isn't strictly an *invalid* hierarchy for creation (we'll create L1 then L2 under it),
+          // but the *existing* L2 cannot be used directly. Treat L2 as 'new' for the approval process.
+          console.warn(`Hierarchy context: Existing L2 "${ l2Name }" found, but intended L1 "${ l1Name }" is new. L2 will be created under the new L1.`);
+          l2Status = 'new';
+          l2Id = undefined; // Cannot use the existing ID
+          parentIsValid = false; // Mark the existing L2's hierarchy as not matching the *intended* new L1
         }
-      } else if (result.level1?.status === 'new') {
-        // L2 exists, but the intended L1 parent is new.
-        // This isn't strictly an *invalid* hierarchy for creation (we'll create L1 then L2 under it),
-        // but the *existing* L2 cannot be used directly. Treat L2 as 'new' for the approval process.
-        console.warn(`Hierarchy context: Existing L2 "${l2Name}" found, but intended L1 "${l1Name}" is new. L2 will be created under the new L1.`);
-        l2Status = 'new';
-        l2Id = undefined; // Cannot use the existing ID
-        parentIsValid = false; // Mark the existing L2's hierarchy as not matching the *intended* new L1
       }
-    }
-    // If L2 is 'new', hierarchy is considered valid *for creation*.
-    currentL2HierarchyValid = parentIsValid; // Track if the *existing* L2 (if found) has the correct parent
-    currentL2Id = l2Status === 'existing' && parentIsValid ? l2Id : undefined; // Only use existing ID if status is 'existing' and parent was valid
+      // If L2 is 'new', hierarchy is considered valid *for creation*.
+      currentL2HierarchyValid = parentIsValid; // Track if the *existing* L2 (if found) has the correct parent
+      currentL2Id = l2Status === 'existing' && parentIsValid ? l2Id : undefined; // Only use existing ID if status is 'existing' and parent was valid
 
-    result.level2 = {
-      name: l2Name,
-      status: l2Status,
-      existingId: l2Id, // Use the potentially reset ID
-      intendedParentId: currentL1Id, // The ID of the L1 tag (existing or *will be* created)
-      intendedLevel: 2,
-      hierarchyValid: currentL2HierarchyValid,
-    };
+      result.level2.push({
+        name: l2Name,
+        status: l2Status,
+        existingId: l2Id, // Use the potentially reset ID
+        intendedParentId: currentL1Id, // The ID of the L1 tag (existing or *will be* created)
+        intendedLevel: 2,
+        hierarchyValid: currentL2HierarchyValid,
+      });
+    });
   } else {
     // No L2 suggestion. Overall hierarchy validity depends only on L1 (which is always true).
   }
@@ -147,14 +149,14 @@ const llmClassificationStatus = computed((): LlmClassificationStatus => {
   // --- Level 3 Check ---
   // Only proceed if L2 was suggested and the hierarchy up to L2 is potentially valid for creation.
   // If result.level2 exists AND (L2 is new OR L2 exists with valid parent), check L3.
-  const canCheckL3 = result.level2 && (result.level2.status === 'new' || result.level2.hierarchyValid);
+  const canCheckL3 = result.level2.length > 0 && (result.level2[ 0 ].status === 'new' || result.level2[ 0 ].hierarchyValid);
 
-  if (llmSuggest.level3TagNames?.length > 0 && canCheckL3 && result.level2) {
-    const intendedL2ParentId = result.level2.status === 'new'
+  if (llmSuggest.level3TagNames?.length > 0 && canCheckL3 && result.level2.length > 0) {
+    const intendedL2ParentId = result.level2[ 0 ].status === 'new'
         ? undefined // L2 is new, its ID isn't known yet, but creation logic will handle it
-        : result.level2.existingId; // Use existing L2 ID if L2 exists and hierarchy was valid
+        : result.level2[ 0 ].existingId; // Use existing L2 ID if L2 exists and hierarchy was valid
 
-    llmSuggest.level3TagNames.forEach(l3Name => {
+    llmSuggest.level3TagNames.forEach((l3Name: string) => {
       const existingL3 = classificationStore.findClassificationByNameAndLevel(l3Name, 3);
       let l3Status: 'existing' | 'new' = existingL3 ? 'existing' : 'new';
       let l3Id = existingL3?.$id;
@@ -165,20 +167,20 @@ const llmClassificationStatus = computed((): LlmClassificationStatus => {
         if (intendedL2ParentId) { // Only check parentage if L2 also exists *and* had valid hierarchy
           parentIsValidL3 = existingL3.parentIds?.includes(intendedL2ParentId) ?? false;
           if (!parentIsValidL3) {
-            console.warn(`Hierarchy mismatch: Existing L3 "${l3Name}" (${existingL3.$id}) is not parented under intended L2 "${result.level2?.name}" (${intendedL2ParentId}). Found parents: ${existingL3.parentIds?.join(', ')}`);
+            console.warn(`Hierarchy mismatch: Existing L3 "${ l3Name }" (${ existingL3.$id }) is not parented under intended L2 "${ result.level2[ 0 ]?.name }" (${ intendedL2ParentId }). Found parents: ${ existingL3.parentIds?.join(', ') }`);
             result.isValidOverallHierarchy = false; // Invalidate overall hierarchy
           }
-        } else if (result.level2?.status === 'new') {
+        } else if (result.level2[ 0 ]?.status === 'new') {
           // L3 exists, but the intended L2 parent is new.
           // Treat L3 as 'new' for the approval process.
-          console.warn(`Hierarchy context: Existing L3 "${l3Name}" found, but intended L2 "${result.level2.name}" is new. L3 will be created under the new L2.`);
+          console.warn(`Hierarchy context: Existing L3 "${ l3Name }" found, but intended L2 "${ result.level2[ 0 ].name }" is new. L3 will be created under the new L2.`);
           l3Status = 'new';
           l3Id = undefined;
           parentIsValidL3 = false; // Mark the existing L3's hierarchy as not matching the *intended* new L2
-        } else if (!result.level2?.hierarchyValid) {
+        } else if (!result.level2[ 0 ]?.hierarchyValid) {
           // L3 exists, but the L2 it should be under had an invalid hierarchy itself.
           // Treat L3 as new.
-          console.warn(`Hierarchy context: Existing L3 "${l3Name}" found, but intended L2 "${result.level2.name}" had invalid parent. L3 will be created under the new/correct L2.`);
+          console.warn(`Hierarchy context: Existing L3 "${ l3Name }" found, but intended L2 "${ result.level2[ 0 ].name }" had invalid parent. L3 will be created under the new/correct L2.`);
           l3Status = 'new';
           l3Id = undefined;
           parentIsValidL3 = false;
@@ -199,8 +201,8 @@ const llmClassificationStatus = computed((): LlmClassificationStatus => {
     // L3 tags were suggested, but L2 was missing or had an invalid hierarchy for usage.
     // All suggested L3s must be treated as 'new' because their intended parent is problematic.
     result.isValidOverallHierarchy = false; // Mark overall as invalid if L2 was the issue
-    console.warn(`Hierarchy issue: Cannot process L3 tags because L2 suggestion ("${result.level2?.name}") was missing, new, or had invalid existing parentage.`);
-    llmSuggest.level3TagNames.forEach(l3Name => {
+    console.warn(`Hierarchy issue: Cannot process L3 tags because L2 suggestion ("${ result.level2[ 0 ]?.name }") was missing, new, or had invalid existing parentage.`);
+    llmSuggest.level3TagNames.forEach((l3Name: string) => {
       result.level3.push({
         name: l3Name,
         status: 'new', // Force new status
@@ -238,14 +240,14 @@ const getHierarchyColorClass = (isValid: boolean | undefined): string => {
 async function approve() {
   // Re-check overall hierarchy validity before approving
   if (!llmClassificationStatus.value.isValidOverallHierarchy) {
-    console.error(`Approval blocked for bookmark ${props.bookmark.$id}: LLM suggested hierarchy conflicts with existing tags or parent is new.`);
+    console.error(`Approval blocked for bookmark ${ props.bookmark.$id }: LLM suggested hierarchy conflicts with existing tags or parent is new.`);
     // Use alert or emit an event instead of directly modifying prop
     alert("Approval failed: LLM suggested hierarchy conflicts with existing tags, or a required parent tag is new but the child tag already exists elsewhere. Please review or edit manually.");
     return;
   }
   // Ensure there's actually a suggestion to approve
   if (!llmClassificationStatus.value.hasSuggestion) {
-    console.warn(`Approval skipped for bookmark ${props.bookmark.$id}: No LLM suggestion found.`);
+    console.warn(`Approval skipped for bookmark ${ props.bookmark.$id }: No LLM suggestion found.`);
     // Maybe change status to 'rejected' or 'needs_manual' directly?
     // Or just do nothing / require manual action.
     // For now, let's call reject.
@@ -285,7 +287,7 @@ function manualEdit() {
         />
       </div>
       <div v-else class="p-0 relative md:col-span-1 flex items-center justify-center bg-muted rounded-lg aspect-video">
-        <Icon name="lucide:image-off" class="h-10 w-10 text-muted-foreground" />
+        <Icon name="lucide:image-off" class="h-10 w-10 text-muted-foreground"/>
       </div>
 
       <!-- Title, URL, Description -->
@@ -321,31 +323,37 @@ function manualEdit() {
               L1
             </Badge>
             <span :class="getStatusColorClass(llmClassificationStatus.level1.status)" class="font-medium">
-              {{ llmClassificationStatus.level1.name }}
-            </span>
+                        {{ llmClassificationStatus.level1.name }}
+                      </span>
             <span class="text-xs text-muted-foreground">
-              ({{ llmClassificationStatus.level1.status }})
-            </span>
+                        ({{ llmClassificationStatus.level1.status }})
+                      </span>
             <!-- L1 doesn't need hierarchy check relative to parent -->
           </div>
 
           <!-- Level 2 -->
-          <div v-if="llmClassificationStatus.level2" class="flex items-center space-x-2 text-sm">
-            <Badge :variant="getStatusVariant(llmClassificationStatus.level2.status)" class="w-10 justify-center">
+          <div v-if="llmClassificationStatus.level2 && llmClassificationStatus.level2.length > 0"
+               class="flex items-start space-x-2 text-sm">
+            <Badge variant="outline" class="w-10 justify-center mt-0.5">
               L2
             </Badge>
-            <span :class="getStatusColorClass(llmClassificationStatus.level2.status)" class="font-medium">
-              {{ llmClassificationStatus.level2.name }}
-            </span>
-            <span class="text-xs text-muted-foreground">
-              ({{ llmClassificationStatus.level2.status }})
-            </span>
-            <span v-if="llmClassificationStatus.level2.status === 'existing'"
-                  :class="getHierarchyColorClass(llmClassificationStatus.level2.hierarchyValid)"
-                  class="text-xs font-mono"
-                  :title="llmClassificationStatus.level2.hierarchyValid ? 'Parent hierarchy matches L1' : 'Existing tag has INCORRECT parent (relative to suggested L1)'">
-                 [{{ getHierarchyIndicator(llmClassificationStatus.level2.hierarchyValid) }}]
-             </span>
+            <div class="flex flex-wrap gap-x-3 gap-y-1">
+              <div v-for="(l2Tag, index) in llmClassificationStatus.level2" :key="index"
+                   class="flex items-center space-x-1">
+                <span :class="getStatusColorClass(l2Tag.status)" class="font-medium">
+                  {{ l2Tag.name }}
+                </span>
+                <span class="text-xs text-muted-foreground">
+                  ({{ l2Tag.status }})
+                </span>
+                <span v-if="l2Tag.status === 'existing'"
+                      :class="getHierarchyColorClass(l2Tag.hierarchyValid)"
+                      class="text-xs font-mono"
+                      :title="l2Tag.hierarchyValid ? 'Parent hierarchy matches L1' : 'Existing tag has INCORRECT parent (relative to suggested L1)'">
+                  [{{ getHierarchyIndicator(l2Tag.hierarchyValid) }}]
+                </span>
+              </div>
+            </div>
           </div>
 
           <!-- Level 3 -->
@@ -354,28 +362,30 @@ function manualEdit() {
               L3
             </Badge>
             <div class="flex flex-wrap gap-x-3 gap-y-1">
-              <div v-for="(l3Tag, index) in llmClassificationStatus.level3" :key="index" class="flex items-center space-x-1">
-                     <span :class="getStatusColorClass(l3Tag.status)" class="font-medium">
-                         {{ l3Tag.name }}
-                     </span>
+              <div v-for="(l3Tag, index) in llmClassificationStatus.level3" :key="index"
+                   class="flex items-center space-x-1">
+                               <span :class="getStatusColorClass(l3Tag.status)" class="font-medium">
+                                   {{ l3Tag.name }}
+                               </span>
                 <span class="text-xs text-muted-foreground">
-                         ({{ l3Tag.status }})
-                     </span>
+                                   ({{ l3Tag.status }})
+                               </span>
                 <span v-if="l3Tag.status === 'existing'"
                       :class="getHierarchyColorClass(l3Tag.hierarchyValid)"
                       class="text-xs font-mono"
                       :title="l3Tag.hierarchyValid ? 'Parent hierarchy matches L2' : 'Existing tag has INCORRECT parent (relative to suggested L2)'">
-                          [{{ getHierarchyIndicator(l3Tag.hierarchyValid) }}]
-                     </span>
+                                    [{{ getHierarchyIndicator(l3Tag.hierarchyValid) }}]
+                               </span>
               </div>
             </div>
           </div>
 
           <!-- Hierarchy Validity Alert -->
           <Alert v-if="!llmClassificationStatus.isValidOverallHierarchy" variant="destructive" class="mt-3">
-            <Icon name="lucide:alert-triangle" class="h-4 w-4" />
+            <Icon name="lucide:alert-triangle" class="h-4 w-4"/>
             <AlertDescription class="text-xs">
-              Hierarchy conflict detected. An existing tag does not have the correct parent based on the suggestion, or a required parent is new while the child exists elsewhere. Approval requires manual review or edit.
+              Hierarchy conflict detected. An existing tag does not have the correct parent based on the suggestion, or
+              a required parent is new while the child exists elsewhere. Approval requires manual review or edit.
             </AlertDescription>
           </Alert>
 
@@ -428,7 +438,7 @@ function manualEdit() {
             :disabled="isApproving || !llmClassificationStatus.isValidOverallHierarchy || !llmClassificationStatus.hasSuggestion || classificationStore.isLoading"
             :aria-label="isApproving ? 'Approving...' : 'Approve'"
         >
-          <Icon v-if="isApproving" name="lucide:loader-2" class="mr-2 h-4 w-4 animate-spin" />
+          <Icon v-if="isApproving" name="lucide:loader-2" class="mr-2 h-4 w-4 animate-spin"/>
           Approve
         </Button>
       </div>

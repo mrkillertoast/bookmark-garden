@@ -11,25 +11,23 @@ import type { IBookmark, IClassification } from '~/types';
 // --- Helper Types --- (Ensure these match your actual data structures)
 interface ParsedLlmClassification {
   level1TagName: string | null;
-  level2TagName: string | null;
+  level2TagNames: string[];
   level3TagNames: string[];
 }
 
-// Keep if manual suggestions are possible, otherwise remove
-// interface ParsedSuggestedNewTag { ... }
 
 // Combined bookmark type used in this page
 type BookmarkWithParsedData = Omit<IBookmark, 'level1Id' | 'level2Ids' | 'level3Ids'> & // Omit original fields if they change type/structure after appwrite fetch
-    Models.Document & // Include Appwrite document fields like $id, $createdAt etc.
     {
+      $id: string;
+      $createdAt: string;
+      $updatedAt: string;
+      $permissions: string[];
       // Explicitly define fields expected from Appwrite document not in IBookmark base
       status: 'pending' | 'approved' | 'rejected';
       llmClassification?: string | null; // JSON string from Appwrite
-      suggestedNewTags?: string | null; // JSON string from Appwrite (if used)
       // Add parsed versions
       parsedLlmClassification?: ParsedLlmClassification | null;
-      // parsedSuggestedNewTags?: ParsedSuggestedNewTag[]; // If used
-      // Fields to be populated after approval (match IBookmark definition)
       level1Id?: string | null;
       level2Ids?: string[] | null; // Array
       level3Ids?: string[] | null; // Array
@@ -100,7 +98,7 @@ const {
               if (parsed && typeof parsed === 'object' && Array.isArray(parsed.level3TagNames)) {
                 parsedLlm = {
                   level1TagName: parsed.level1TagName || null,
-                  level2TagName: parsed.level2TagName || null,
+                  level2TagNames: parsed.level2TagNames || [],
                   level3TagNames: parsed.level3TagNames || [],
                 };
               } else {
@@ -242,9 +240,8 @@ async function handleApproveBookmark(bookmark: BookmarkWithParsedData, status: L
     return;
   }
 
-
   let finalL1Id: string | null = null;
-  let finalL2Id: string | null = null; // Single L2 based on LLM suggestion structure
+  const finalL2Ids: string[] = []; // Array to store multiple L2 IDs
   const finalL3Ids: string[] = [];
 
   try {
@@ -254,25 +251,41 @@ async function handleApproveBookmark(bookmark: BookmarkWithParsedData, status: L
     if (!finalL1Id) throw new Error(`Failed to find or create L1 tag "${ status.level1.name }"`);
     console.log(` > L1 ID: ${ finalL1Id }`);
 
-    // --- Process Level 2 ---
-    if (status.level2) {
-      console.log(`Processing L2: ${ status.level2.name } (${ status.level2.status })`);
-      // Parent ID for L2 is always the finalL1Id we just obtained/confirmed
-      finalL2Id = await findOrCreateTag(status.level2.name, 2, [ finalL1Id ]);
-      if (!finalL2Id) throw new Error(`Failed to find or create L2 tag "${ status.level2.name }"`);
-      console.log(` > L2 ID: ${ finalL2Id }`);
+    // --- Process Level 2 (as array) ---
+    if (status.level2 && status.level2.length > 0) {
+      console.log(`Processing ${ status.level2.length } L2 tags...`);
 
-      // --- Process Level 3 ---
-      if (status.level3.length > 0) {
-        console.log(`Processing L3 tags (${ status.level3.length })...`);
-        // Parent ID for all L3 tags is the finalL2Id
-        for (const l3TagStatus of status.level3) {
-          console.log(`  Processing L3: ${ l3TagStatus.name } (${ l3TagStatus.status })`);
-          const l3Id = await findOrCreateTag(l3TagStatus.name, 3, [ finalL2Id ]);
-          if (!l3Id) throw new Error(`Failed to find or create L3 tag "${ l3TagStatus.name }"`);
-          finalL3Ids.push(l3Id);
-          console.log(`   > L3 ID: ${ l3Id }`);
+      // Process each L2 tag in the array
+      for (const l2TagStatus of status.level2) {
+        console.log(`  Processing L2: ${ l2TagStatus.name } (${ l2TagStatus.status })`);
+        // Parent ID for L2 is always the finalL1Id we just obtained/confirmed
+        const l2Id = await findOrCreateTag(l2TagStatus.name, 2, [ finalL1Id ]);
+        if (!l2Id) throw new Error(`Failed to find or create L2 tag "${ l2TagStatus.name }"`);
+        finalL2Ids.push(l2Id);
+        console.log(`   > L2 ID: ${ l2Id }`);
+
+        // --- Process Level 3 for this specific L2 parent ---
+        // Find L3 tags that should be under this L2
+        // This assumes L3 tags in status.level3 have intendedParentId matching the L2's existingId
+        // or if L2 is new, it would match the first L2 in the array (may need adjustment)
+        const relevantL3Tags = status.level3.filter(l3 =>
+            (l2TagStatus.existingId && l3.intendedParentId === l2TagStatus.existingId) ||
+            (status.level2[ 0 ] === l2TagStatus && !l3.intendedParentId)
+        );
+
+        if (relevantL3Tags.length > 0) {
+          console.log(`  Processing ${ relevantL3Tags.length } L3 tags for L2 "${ l2TagStatus.name }"...`);
+          for (const l3TagStatus of relevantL3Tags) {
+            console.log(`    Processing L3: ${ l3TagStatus.name } (${ l3TagStatus.status })`);
+            const l3Id = await findOrCreateTag(l3TagStatus.name, 3, [ l2Id ]);
+            if (!l3Id) throw new Error(`Failed to find or create L3 tag "${ l3TagStatus.name }"`);
+            finalL3Ids.push(l3Id);
+            console.log(`     > L3 ID: ${ l3Id }`);
+          }
         }
+      }
+      console.log(` > Final L2 IDs: ${ finalL2Ids.join(', ') }`);
+      if (finalL3Ids.length > 0) {
         console.log(` > Final L3 IDs: ${ finalL3Ids.join(', ') }`);
       }
     }
@@ -282,10 +295,9 @@ async function handleApproveBookmark(bookmark: BookmarkWithParsedData, status: L
     const updateData: Partial<BookmarkWithParsedData> & { status: string } = {
       status: 'verified',
       level1Id: finalL1Id,
-      level2Ids: finalL2Id ? [ finalL2Id ] : [], // Store as array even if single
+      level2Ids: finalL2Ids, // Now using array of all L2 IDs
       level3Ids: finalL3Ids,
       llmClassification: null, // Clear the suggestion once processed
-      suggestedNewTags: null, // Clear this too if it exists/was used
     };
 
     await $appwrite.databases.updateDocument(
