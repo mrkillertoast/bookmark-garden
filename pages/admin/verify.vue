@@ -348,11 +348,44 @@ async function handleRejectBookmark(bookmarkId: string) {
   }
 }
 
-// Placeholder for potential manual edit flow trigger
-function handleManualEditBookmark(bookmark: BookmarkWithParsedData) {
-  console.log(`Manual edit triggered for bookmark: ${ bookmark.$id }`, bookmark);
-  // Implement navigation or modal logic here
-  alert(`Manual edit for "${ bookmark.title }" not implemented yet.`);
+/**
+ * Handles the manual edit of a bookmark's classification tags.
+ */
+async function handleManualEditBookmark(bookmark: BookmarkWithParsedData) {
+  const bookmarkId = bookmark.$id;
+  if (!bookmarkId) {
+    console.error('Cannot edit bookmark: Missing ID.');
+    return;
+  }
+
+  console.log(`--- Manually Editing Bookmark ${ bookmarkId } ---`, bookmark);
+  setApprovalStatus(bookmarkId, true, null); // Use approving state for loading indication
+
+  try {
+    // Prepare update data
+    const updateData: Partial<BookmarkWithParsedData> = {
+      level1Id: bookmark.level1Id,
+      level2Ids: bookmark.level2Ids,
+      level3Ids: bookmark.level3Ids,
+      // Don't change status - keep it as pending for further review
+      // Don't clear llmClassification - keep it for reference
+    };
+
+    // Update the bookmark in the database
+    await $appwrite.databases.updateDocument(
+      DATABASE_ID,
+      COLLECTION_ID_BOOKMARKS,
+      bookmarkId,
+      updateData
+    );
+
+    console.log(`--- Bookmark ${ bookmarkId } Updated Successfully ---`);
+    setApprovalStatus(bookmarkId, false, null);
+    await refreshBookmarks(); // Refresh the list
+  } catch (error: any) {
+    console.error(`Error updating bookmark ${ bookmarkId }:`, error);
+    setApprovalStatus(bookmarkId, false, error.message || 'An unknown error occurred during update.');
+  }
 }
 
 </script>

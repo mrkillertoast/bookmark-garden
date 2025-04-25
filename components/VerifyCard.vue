@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, ref } from 'vue';
 import { Card, CardHeader, CardContent, CardFooter } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Icon } from '#components'; // Use auto-imported Icon
+import EditBookmarkDialog from './EditBookmarkDialog.vue';
 
 // Adjust the import as needed based on your actual type definitions
 import type { Bookmark as BookmarkWithParsedData, IClassification } from '~/types';
@@ -48,17 +49,25 @@ export interface LlmClassificationStatus {
   hasSuggestion: boolean; // Does the bookmark have any LLM suggestion?
 }
 
+const llmSuggestions = ref({
+  level1TagName: props.bookmark.parsedLlmClassification?.level1TagName,
+  level2TagNames: [ ...(props.bookmark.parsedLlmClassification?.level2TagNames || []) ],
+  level3TagNames: [ ...(props.bookmark.parsedLlmClassification?.level3TagNames || []) ]
+});
+
 const llmClassificationStatus = computed((): LlmClassificationStatus => {
   const result: LlmClassificationStatus = {
     level1: null,
     level2: [],
     level3: [],
-    isValidOverallHierarchy: true, // Assume valid initially
+    isValidOverallHierarchy: true,
     hasSuggestion: false,
   };
 
-  const llmSuggest = props.bookmark.parsedLlmClassification;
+  // Use llmSuggestions.value instead of props.bookmark.parsedLlmClassification
+  const llmSuggest = llmSuggestions.value;
 
+  // Rest of your existing computed logic...
   // Ensure store is loaded before proceeding
   if (!classificationStore.hasLoaded && !classificationStore.isLoading) {
     console.warn('Classification store not loaded yet in VerifyCard. Retrying fetch.');
@@ -263,15 +272,62 @@ async function reject() {
   await props.handleReject(props.bookmark.$id);
 }
 
+// State for edit dialog
+const isEditDialogOpen = ref(false);
+
 // Wrapper for manual edit
 function manualEdit() {
   if (props.handleManualEdit) {
-    props.handleManualEdit(props.bookmark);
+    isEditDialogOpen.value = true;
   } else {
     console.warn('Manual edit handler not provided to VerifyCard');
   }
 }
 
+// Handle dialog close
+function handleDialogClose() {
+  isEditDialogOpen.value = false;
+}
+
+// Handle save from dialog
+async function handleDialogSave(bookmarkId: string, level1Id: string | null, level2Id: string | null, level3Id: string | null) {
+  if (props.handleManualEdit) {
+    // Create a copy of the bookmark with updated tag IDs
+    const updatedBookmark = { ...props.bookmark };
+    updatedBookmark.level1Id = level1Id;
+
+    // Convert single IDs to arrays as needed by the data model
+    updatedBookmark.level2Ids = level2Id ? [ level2Id ] : [];
+    updatedBookmark.level3Ids = level3Id ? [ level3Id ] : [];
+
+    // Call the parent handler
+    props.handleManualEdit(updatedBookmark);
+  }
+}
+
+
+function removeTag(level: 'level2' | 'level3', index: number) {
+  console.log(`Removing tag at index ${ index } for level ${ level }`);
+
+  if (level === 'level2') {
+    // Store the name of the L2 tag being removed
+    const removedL2Name = llmSuggestions.value.level2TagNames[ index ];
+
+    // Remove the L2 tag
+    llmSuggestions.value.level2TagNames.splice(index, 1);
+
+    // Remove any L3 tags that were under this L2
+    // This assumes L3 tags are ordered according to their L2 parents
+    // You might need to adjust this logic based on your actual data structure
+    llmSuggestions.value.level3TagNames = llmSuggestions.value.level3TagNames.filter((_, i) => {
+      // You might need to adjust this filtering logic based on your actual parent-child relationship
+      return Math.floor(i / (llmSuggestions.value.level3TagNames.length / (llmSuggestions.value.level2TagNames.length + 1))) !== index;
+    });
+  } else {
+    // Remove L3 tag
+    llmSuggestions.value.level3TagNames.splice(index, 1);
+  }
+}
 </script>
 
 <template>
@@ -338,45 +394,67 @@ function manualEdit() {
               L2
             </Badge>
             <div class="flex flex-wrap gap-x-3 gap-y-1">
-              <div v-for="(l2Tag, index) in llmClassificationStatus.level2" :key="index"
-                   class="flex items-center space-x-1">
-                <span :class="getStatusColorClass(l2Tag.status)" class="font-medium">
+              <Badge
+                  v-for="(l2Tag, index) in llmClassificationStatus.level2"
+                  :key="index"
+                  :variant="l2Tag.status === 'existing' ? 'secondary' : 'default'"
+                  class="flex items-center gap-1"
+              >
+                <span :class="getStatusColorClass(l2Tag.status)">
                   {{ l2Tag.name }}
                 </span>
-                <span class="text-xs text-muted-foreground">
+                <span class="text-xs opacity-70">
                   ({{ l2Tag.status }})
                 </span>
                 <span v-if="l2Tag.status === 'existing'"
                       :class="getHierarchyColorClass(l2Tag.hierarchyValid)"
                       class="text-xs font-mono"
-                      :title="l2Tag.hierarchyValid ? 'Parent hierarchy matches L1' : 'Existing tag has INCORRECT parent (relative to suggested L1)'">
+                >
                   [{{ getHierarchyIndicator(l2Tag.hierarchyValid) }}]
                 </span>
-              </div>
+                <button
+                    @click="removeTag('level2', index)"
+                    class="ml-1 hover:text-destructive"
+                    title="Remove tag"
+                >
+                  <Icon name="lucide:x" class="h-3 w-3"/>
+                </button>
+              </Badge>
             </div>
           </div>
 
           <!-- Level 3 -->
           <div v-if="llmClassificationStatus.level3.length > 0" class="flex items-start space-x-2 text-sm">
-            <Badge variant="outline" class="w-10 justify-center mt-0.5"> <!-- Adjust alignment -->
+            <Badge variant="outline" class="w-10 justify-center mt-0.5">
               L3
             </Badge>
             <div class="flex flex-wrap gap-x-3 gap-y-1">
-              <div v-for="(l3Tag, index) in llmClassificationStatus.level3" :key="index"
-                   class="flex items-center space-x-1">
-                               <span :class="getStatusColorClass(l3Tag.status)" class="font-medium">
-                                   {{ l3Tag.name }}
-                               </span>
-                <span class="text-xs text-muted-foreground">
-                                   ({{ l3Tag.status }})
-                               </span>
+              <Badge
+                  v-for="(l3Tag, index) in llmClassificationStatus.level3"
+                  :key="index"
+                  :variant="l3Tag.status === 'existing' ? 'secondary' : 'default'"
+                  class="flex items-center gap-1"
+              >
+                <span :class="getStatusColorClass(l3Tag.status)">
+                  {{ l3Tag.name }}
+                </span>
+                <span class="text-xs opacity-70">
+                  ({{ l3Tag.status }})
+                </span>
                 <span v-if="l3Tag.status === 'existing'"
                       :class="getHierarchyColorClass(l3Tag.hierarchyValid)"
                       class="text-xs font-mono"
-                      :title="l3Tag.hierarchyValid ? 'Parent hierarchy matches L2' : 'Existing tag has INCORRECT parent (relative to suggested L2)'">
-                                    [{{ getHierarchyIndicator(l3Tag.hierarchyValid) }}]
-                               </span>
-              </div>
+                >
+                  [{{ getHierarchyIndicator(l3Tag.hierarchyValid) }}]
+                </span>
+                <button
+                    @click="removeTag('level3', index)"
+                    class="ml-1 hover:text-destructive"
+                    title="Remove tag"
+                >
+                  <Icon name="lucide:x" class="h-3 w-3"/>
+                </button>
+              </Badge>
             </div>
           </div>
 
@@ -444,4 +522,14 @@ function manualEdit() {
       </div>
     </CardFooter>
   </Card>
+
+  <!-- Edit Dialog -->
+  <EditBookmarkDialog
+      :is-open="isEditDialogOpen"
+      :bookmark="props.bookmark"
+      :on-close="handleDialogClose"
+      :on-save="handleDialogSave"
+      :llm-suggestions="llmSuggestions.value"
+      @update:is-open="isEditDialogOpen = $event"
+  />
 </template>
