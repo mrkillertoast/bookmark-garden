@@ -76,68 +76,52 @@ async function fetchStatistics() {
 /**
  * Submits the new URL to the Appwrite function.
  */
+/**
+ * Submits the new URL using $fetch instead of Appwrite functions.
+ */
 async function submitNewUrl() {
   if (!newUrl.value.trim()) {
     submitMessage.value = { type: 'error', text: 'URL cannot be empty.' };
     return;
   }
-  // Basic URL validation (optional, can be more robust)
+
+  // Basic URL validation
   try {
-    new URL(newUrl.value); // Check if it's a parseable URL
+    new URL(newUrl.value);
   } catch (_) {
     submitMessage.value = { type: 'error', text: 'Please enter a valid URL.' };
     return;
   }
 
-  if (!FUNCTION_ID_ADD_BOOKMARK) {
-    submitMessage.value = { type: 'error', text: 'Add Bookmark Function ID is not configured.' };
-    return;
-  }
-
-
   isSubmitting.value = true;
   submitMessage.value = null;
 
-
   try {
+    console.log(`Submitting URL: ${ newUrl.value }`);
 
-    console.log(`Calling function ${ FUNCTION_ID_ADD_BOOKMARK } with URL: ${ newUrl.value }`);
-    const execution = await $appwrite.functions.createExecution(
-        config.public.appwriteFunctionIdAddBookmark,
-        JSON.stringify(`{
-          url: newUrl.value,
-        }`),
-        true,
-    )
+    // Use $fetch to call your API endpoint
+    //const response = await $fetch('https://67f18694d1aa3e90f1bd.appwrite.global/', {
+    const response = await $fetch('http://localhost:3000/', {
+      method: 'POST',
+      body: {
+        url: newUrl.value
+      }
+    });
 
-    console.log('Function execution response:', execution);
+    console.log('API response:', response);
 
-    // Check function execution status/response if needed
-    if (execution.status === 'completed') {
-      // Consider parsing execution.responseBody if your function returns useful info
+    if (response.success) {
       submitMessage.value = { type: 'success', text: 'Bookmark added successfully and is pending validation.' };
       newUrl.value = ''; // Clear input on success
       // Refresh statistics after adding
       await fetchStatistics();
     } else {
-      // Handle 'failed' status specifically
-      let errorMsg = `Function execution finished with status: ${ execution.status }.`;
-      if (execution.stderr) {
-        errorMsg += ` Error details: ${ execution.stderr }`;
-      }
-      console.error('Appwrite function execution failed:', execution);
-      submitMessage.value = { type: 'error', text: errorMsg };
+      submitMessage.value = { type: 'error', text: response.message || 'Failed to add bookmark' };
     }
-
   } catch (e: any) {
     console.error('Failed to submit new URL:', e);
-    let errorText = 'An unexpected error occurred.';
-    if (e instanceof AppwriteException) {
-      errorText = `Failed to add bookmark: ${ e.message } (Code: ${ e.code })`;
-    } else if (e instanceof Error) {
-      errorText = `Failed to add bookmark: ${ e.message }`;
-    }
-    submitMessage.value = { type: 'error', text: errorText };
+    const errorText = e.message || 'An unexpected error occurred.';
+    submitMessage.value = { type: 'error', text: `Failed to add bookmark: ${ errorText }` };
   } finally {
     isSubmitting.value = false;
   }
